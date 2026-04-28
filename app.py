@@ -283,14 +283,8 @@ if st.session_state.app_mode==APP_MODE_SCAN:
         )
         st.caption(
             f"共 **{len(_ord)}** 筆站內、**{len(_ext)}** 筆外站。試算表「掃描清單」中，**前段為站內網址**，"
-            f"**接續同表後段為外站**（「類型」欄可區分）；外站清單亦在下方可展開檢視。"
+            f"**接續同表後段為外站**（「類型」欄可區分）。"
         )
-        if _ext:
-            with st.expander(
-                f"掃描到的外站連結（共 {len(_ext)} 筆，與 Excel 中外站列相同）",
-                expanded=True,
-            ):
-                render_wrapped_external_links(_ext)
         st.markdown("### 📊完整檢核指標報告")
         indicators=[
             ("1.基本要件",st.session_state.global_features['privacy'] and st.session_state.global_features['security'] and st.session_state.global_features['address']),
