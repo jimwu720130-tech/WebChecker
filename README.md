@@ -85,6 +85,16 @@ streamlit run app.py
 
 雙擊專案根目錄下的 **`一鍵啟動.bat`**，會於新路徑開啟命令視窗並執行 `python -m streamlit run app.py`（若無 `python` 則嘗試 `py -3`）。關閉該視窗即停止服務。
 
+### 免安裝 Python／Playwright（Windows 可攜式套件）
+
+若希望**使用端不必安裝 Python、也不必執行 `playwright install`**，可在**一台已安裝 Python 的 Windows 電腦**上製作可攜式資料夾，再壓成 ZIP 或再用 Inno Setup 等做成「安裝檔」分發：
+
+1. 於專案根目錄執行 **`scripts\製作可攜式套件.bat`**（或 `powershell -ExecutionPolicy Bypass -File scripts\build_portable_windows.ps1`）。
+2. 完成後會產生 **`dist\WebChecker-Portable\`**，內含 `.venv`、Chromium（`ms-playwright`）與程式檔。
+3. 將 **`WebChecker-Portable`** 整包 ZIP 給使用者；使用者解壓後雙擊 **`啟動WebChecker.bat`** 即可（會設定 `PLAYWRIGHT_BROWSERS_PATH` 指向同目錄瀏覽器）。
+
+**說明：** 製作機仍需 Python 與網路以下載套件；套件體積約數百 MB；Chromium 與 Python 皆綁定建置時的 Windows 環境，建議在與使用者相近的系統（例如 64 位元 Windows 10/11）上製作。
+
 ---
 
 ## 使用方法
@@ -132,6 +142,9 @@ WebChecker/
 ├── requirements.txt       # pip 相依套件（不含 playwright，需另 pip install playwright）
 ├── README.md              # 本說明檔
 ├── 一鍵啟動.bat           # Windows 快速啟動 Streamlit（可選）
+├── scripts/               # 可攜式套件建置腳本（Windows）
+│   ├── build_portable_windows.ps1
+│   └── 製作可攜式套件.bat
 ├── .streamlit/
 │   └── config.toml        # Streamlit 客戶端設定（例如極簡工具列）
 ├── config.json            # （選用）排除規則，執行後可能由程式建立

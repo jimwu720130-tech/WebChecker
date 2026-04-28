@@ -3,7 +3,7 @@ from typing import List, Optional, Set, Tuple
 import sys
 
 # 供除錯／版本確認：與 Streamlit 側欄「檢核核心版本」應一致
-SCAN_ENGINE_BUILD = "2026-04-25-p12"
+SCAN_ENGINE_BUILD = "2026-04-25-p13"
 import random
 import requests
 import urllib3
@@ -493,7 +493,10 @@ def _probe_url_variants_trailing_slash(u:str):
         pass
 
 def _try_probe_single_url(url:str,headers:dict)->bool:
-    """對單一 URL 做 HEAD→必要時 GET；不含 http→https 升級邏輯。"""
+    """對單一 URL 先 HEAD；若未判定為可連線（含少見 4xx）一律再試 GET 複核。
+
+    部分主機對 HEAD 回 404/405/501 或**非列表內之 4xx**，但 GET 仍正常；舊版僅對固定幾種
+    HEAD 狀態改試 GET，其餘直接 False，易與瀏覽器不一致。"""
     def ok_status(code:Optional[int])->bool:
         return _http_status_reachable_for_external_check(code)
     try:
@@ -501,10 +504,8 @@ def _try_probe_single_url(url:str,headers:dict)->bool:
         sc=r.status_code
         if ok_status(sc):
             return True
-        if sc in(400,404,405,501)or(sc is not None and 500 <= sc<600 and sc not in(503,)):
-            code=_get_probe_get_result(url,headers)
-            return ok_status(code)
-        return False
+        code=_get_probe_get_result(url,headers)
+        return ok_status(code)
     except Exception:
         pass
     try:
