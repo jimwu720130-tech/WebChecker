@@ -1,0 +1,3 @@
+# 本機執行時隱藏右上角 Deploy、開發者選單等
+[client]
+toolbarMode = "minimal"

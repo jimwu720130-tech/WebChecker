@@ -1,0 +1,9 @@
+streamlit
+requests
+aiohttp
+beautifulsoup4
+pandas
+urllib3
+xlsxwriter
+fake-useragent
+tenacity
