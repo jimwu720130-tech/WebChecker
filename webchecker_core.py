@@ -3,7 +3,7 @@ from typing import List, Optional, Set, Tuple
 import sys
 
 # 供除錯／版本確認：與 Streamlit 側欄「檢核核心版本」應一致
-SCAN_ENGINE_BUILD = "2026-04-25-p13"
+SCAN_ENGINE_BUILD = "2026-05-05-p14"
 import random
 import requests
 import urllib3
@@ -254,8 +254,46 @@ _ONCLICK_URL_RE = re.compile(
     re.I,
 )
 
+# 看起來像 CSS 選擇器（用於 scrollTo / 錨點切換）而非實際 URL：開頭為 . 或 #，且僅含
+# 識別字元／空白／點號／井字。常見於台灣政府網站之 onclick 內 `goto('.div_xxx')` 樣式，
+# urljoin 會把它當相對路徑接到目前頁面後造成 404 連結（誤入「3.語系編碼」名單）。
+_CSS_SELECTOR_LIKE_RE = re.compile(r"^[.#][A-Za-z][\w\s.#-]*$")
+
+def _looks_like_css_selector(s: str) -> bool:
+    if not s:
+        return False
+    s = s.strip()
+    if not s:
+        return False
+    # 真正的 URL 都會有以下任一：scheme(://) / 路徑分隔(/) / 查詢(?) / 副檔名 .xxx 結尾或路徑中含 /xxx.
+    if "://" in s or "/" in s or "?" in s:
+        return False
+    return bool(_CSS_SELECTOR_LIKE_RE.match(s))
+
 # 常見自訂 data-* URL 屬性名稱
 _DATA_URL_ATTRS = ('data-href', 'data-url', 'data-link', 'data-go', 'data-goto', 'data-nav', 'data-target-url')
+
+def _trim_url_tail(u: str) -> str:
+    """移除 URL 末端常見尾贅標點，但保留路徑內成對的 ()。
+
+    舊版正則排除路徑中之 ) 並用 rstrip 清掉尾贅，遇到 PDF 檔名含 () 之中文檔（如
+    `…(含反詐騙宣導)…顧問).pdf`）會被截斷，致連結被誤判為 5.有效連結／3.語系編碼。
+    新版：允許 ) 在 URL 內，僅在「結尾 ) 數量多於 (」時逐一移除。"""
+    if not u:
+        return u
+    while u:
+        last = u[-1]
+        if last in ".,;:\"'":
+            u = u[:-1]
+            continue
+        if last == ")":
+            # 計算 URL 內括號是否平衡：若右括號比左括號多，去掉一個尾端 )。
+            if u.count(")") > u.count("("):
+                u = u[:-1]
+                continue
+            break
+        break
+    return u
 
 # 下載處理器常見 binary MIME 前綴（URL 無副檔名但回傳文件內容）
 _BINARY_DOC_MIME_PREFIXES = (
@@ -327,8 +365,11 @@ def extract_same_domain_links(html:str,page_url:str,target_domain:str,file_exts=
     try:
         flat=html_unescape(html)
         host=re.escape(td)
-        for m in re.finditer(rf'https?://{host}(?:/[^\s\"\'<>)]*)?',flat,re.I):
-            u=m.group(0).rstrip('.,;)\'"')
+        # 路徑字元集不再排除 )；尾贅標點以 _trim_url_tail（會平衡括號）統一處理，
+        # 避免將 PDF 中文檔名含 () 之同網域連結截成假連結後送進待掃佇列。
+        for m in re.finditer(rf'https?://{host}(?:/[^\s\"\'<>]*)?',flat,re.I):
+            u=_trim_url_tail(m.group(0))
+            if not u:continue
             if u.lower().startswith(('javascript:','mailto:','tel:','data:')):continue
             full=urljoin(page_url,u).split('#')[0]
             if urlparse(full).netloc.lower()!=td:continue
@@ -352,6 +393,10 @@ def extract_same_domain_links(html:str,page_url:str,target_domain:str,file_exts=
     def _add_if_same_domain(rh:str):
         if not rh or rh.lower().startswith(("javascript:","mailto:","tel:","#","data:")):
             return
+        # CSS 選擇器（如 `.div_xxx`、`#header`）多半是 scroll/anchor 目標，urljoin 後會
+        # 變成 `…/EN/.div_xxx` 之類無效路徑（IIS 回 404+big5 而被誤判 3.語系編碼）。
+        if _looks_like_css_selector(rh):
+            return
         full=urljoin(page_url,rh).split("#")[0]
         if urlparse(full).netloc.lower()!=td:
             return
@@ -372,7 +417,9 @@ def extract_same_domain_links(html:str,page_url:str,target_domain:str,file_exts=
 
 # 外站連結：每一筆皆做 HEAD/GET 連線驗證
 # requests timeout=(連線秒, 讀取秒)，避免 DNS/握手卡住
-_PROBE_REQ_TIMEOUT=(4, 10)
+# 從 (4, 10) 略放寬至 (8, 20)：高併發下對 Facebook、Google Maps 等大型站台的初次連線
+# 與 TLS 握手 4 秒過短，少數機器網路抖動會被誤判成「不可達」。
+_PROBE_REQ_TIMEOUT=(8, 20)
 # 同一批 Playwright 並行頁面**共用**此外站探測併發，避免 4×12=48 同時連線拖死或假死
 _BATCH_EXTERNAL_PROBE_CONCURRENCY=16
 # 單頁含「開頁＋擷取連結＋**全部**外站實測」總上限（外站多時必須夠長）
@@ -496,13 +543,19 @@ def _try_probe_single_url(url:str,headers:dict)->bool:
     """對單一 URL 先 HEAD；若未判定為可連線（含少見 4xx）一律再試 GET 複核。
 
     部分主機對 HEAD 回 404/405/501 或**非列表內之 4xx**，但 GET 仍正常；舊版僅對固定幾種
-    HEAD 狀態改試 GET，其餘直接 False，易與瀏覽器不一致。"""
+    HEAD 狀態改試 GET，其餘直接 False，易與瀏覽器不一致。
+
+    社群／分享頁（Facebook sharer 等）對 HEAD 也會回 400+text/html，瀏覽器仍可正常開啟；
+    本函式在 HEAD 端同樣套用「400 且回 HTML 視為可達」之放寬規則。"""
     def ok_status(code:Optional[int])->bool:
         return _http_status_reachable_for_external_check(code)
     try:
         r=requests.head(url,headers=headers,timeout=_PROBE_REQ_TIMEOUT,allow_redirects=True,verify=False)
         sc=r.status_code
         if ok_status(sc):
+            return True
+        ct=(r.headers.get("content-type")or"").lower()
+        if sc==400 and("text/html"in ct or"/html"in ct or"html"in ct):
             return True
         code=_get_probe_get_result(url,headers)
         return ok_status(code)
@@ -1694,17 +1747,84 @@ def check_flash_or_legacy_ria(html:str,soup)->bool:
 # ==========================================
 # PageSpeed API測速邏輯
 # ==========================================
-def get_pagespeed_score(url):
-    base_url="https://www.googleapis.com/pagespeedonline/v5/runPagespeed"
-    api_key="AIzaSyC0Sl-HJH1lBKi5B9FMvxydM63VY-vhtpc"
+# Google PageSpeed Insights v5 API 可在「不帶 API key」下使用，但每日總額較低且共用配額；
+# 若使用者在 .streamlit/secrets.toml 或環境變數 PSI_API_KEY 設定自有 key，將優先使用。
+PAGESPEED_API_BASE = "https://www.googleapis.com/pagespeedonline/v5/runPagespeed"
+
+def _pagespeed_api_key()->str:
+    """讀取 PSI_API_KEY 環境變數；亦支援 Streamlit secrets（若可載入）。"""
+    k = (os.environ.get("PSI_API_KEY") or "").strip()
+    if k:
+        return k
     try:
-        res_m=requests.get(f"{base_url}?url={url}&strategy=mobile&key={api_key}",timeout=90)
-        score_m=res_m.json()['lighthouseResult']['categories']['performance']['score']*100 if res_m.status_code==200 else 0
-        res_d=requests.get(f"{base_url}?url={url}&strategy=desktop&key={api_key}",timeout=90)
-        score_d=res_d.json()['lighthouseResult']['categories']['performance']['score']*100 if res_d.status_code==200 else 0
-        return (True,(score_m+score_d)/2,score_m,score_d,"測試成功") if res_m.status_code==200 else (False,0,0,0,"API錯誤")
+        import streamlit as st  # 僅當在 Streamlit 環境內載入；CLI/單元測試時忽略
+        try:
+            v = st.secrets.get("PSI_API_KEY", "")  # type: ignore[attr-defined]
+            if v:
+                return str(v).strip()
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return ""
+
+def _pagespeed_call(url:str, strategy:str, api_key:str):
+    """單次 PSI 呼叫；回傳 (status_code, json_or_None, friendly_error_msg)。"""
+    qs = f"url={requests.utils.quote(url, safe='')}&strategy={strategy}"
+    if api_key:
+        qs += f"&key={api_key}"
+    full = f"{PAGESPEED_API_BASE}?{qs}"
+    try:
+        r = requests.get(full, timeout=120)
     except Exception as e:
-        return False,0,0,0,str(e)
+        return 0, None, f"PSI 連線失敗：{type(e).__name__}：{e}"
+    try:
+        j = r.json()
+    except Exception:
+        j = None
+    if r.status_code == 200 and j:
+        return r.status_code, j, ""
+    msg = ""
+    if isinstance(j, dict):
+        err = j.get("error") or {}
+        em = (err.get("message") or "").strip()
+        reason = ""
+        for d in (err.get("details") or []):
+            rr = (d.get("reason") or "")
+            if rr:
+                reason = rr; break
+        if em:
+            msg = f"PSI {r.status_code}：{em}"
+            if reason:
+                msg += f"（{reason}）"
+    if not msg:
+        msg = f"PSI HTTP {r.status_code}"
+    return r.status_code, j, msg
+
+def get_pagespeed_score(url):
+    """回傳 (success, avg, mobile, desktop, msg)。msg 為失敗時的細節訊息（含 API 端錯誤理由）。"""
+    api_key = _pagespeed_api_key()
+    sc_m, j_m, err_m = _pagespeed_call(url, "mobile", api_key)
+    sc_d, j_d, err_d = _pagespeed_call(url, "desktop", api_key)
+    def _score(j):
+        try:
+            return float(j["lighthouseResult"]["categories"]["performance"]["score"]) * 100.0
+        except Exception:
+            return 0.0
+    if sc_m == 200 and sc_d == 200 and j_m and j_d:
+        m = _score(j_m); d = _score(j_d)
+        return True, (m + d) / 2.0, m, d, "測試成功"
+    parts = []
+    if err_m:
+        parts.append(f"行動：{err_m}")
+    if err_d:
+        parts.append(f"電腦：{err_d}")
+    msg = "；".join(parts) or "API 錯誤"
+    if "API_KEY_INVALID" in msg or "API key expired" in msg or "API key not valid" in msg:
+        msg += "（請於環境變數 PSI_API_KEY 或 .streamlit/secrets.toml 設定有效金鑰）"
+    elif "RESOURCE_EXHAUSTED" in msg or "Quota exceeded" in msg or "rateLimit" in msg.lower():
+        msg += "（共用配額已用罄；請設定自有 PSI_API_KEY 或稍後再試）"
+    return False, 0.0, 0.0, 0.0, msg
 
 # ==========================================
 # 核心引擎：精準校驗版Playwright
@@ -1730,7 +1850,15 @@ async def check_single_page(
         await page.set_extra_http_headers(_extra_browser_headers(ref))
         # PDF 等仍以 commit 快取首包；一般 HTML 用 domcontentloaded 取得較穩定的 navigation response，減少誤判 5.有效連結
         _nav_wait="commit"if is_requested_as_file else"domcontentloaded"
-        response=await page.goto(safe_url,wait_until=_nav_wait,timeout=45000,referer=ref)
+        try:
+            response=await page.goto(safe_url,wait_until=_nav_wait,timeout=45000,referer=ref)
+        except Exception as nav_err:
+            # Playwright 在 Content-Disposition: attachment 時會丟「Download is starting」例外，
+            # 對 .pdf／.docx 等檔案連結而言**屬下載成功**，連結是有效的；不要捕到後置回失敗。
+            if is_requested_as_file and "download" in (str(nav_err) or "").lower():
+                await page.close()
+                return page_errors,"",detail_found,set(),url,[],[]
+            raise
         nav_recovered=False
         content_type=""
         st=getattr(response,"status",None)if response else None
@@ -1750,6 +1878,12 @@ async def check_single_page(
         else:
             # 登入／挑戰頁等：首包可能無 response 或 status≥400，但主框架已導向同站 HTML
             if is_requested_as_file:
+                await page.close()
+                return["5.有效連結"],"",detail_found,set(),url,[],[]
+            # 真正破損的 4xx/5xx（如 IIS `/EN/.div_xxx` 走 404+big5 預設頁）必須列入 5.有效連結；
+            # 否則程式會「復原」進入 charset 檢查，把錯誤碼網址誤判成「3.語系編碼」。
+            # 僅 401/403/407/429（需登入／節流等）與 503（暫時不可用）視為可恢復。
+            if st is not None and not _http_status_reachable_for_external_check(st):
                 await page.close()
                 return["5.有效連結"],"",detail_found,set(),url,[],[]
             try:

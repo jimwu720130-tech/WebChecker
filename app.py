@@ -108,6 +108,26 @@ st.sidebar.caption("外觀")
 if st.sidebar.button("🌙 切換為深色"if st.session_state.get("ui_theme")=="light"else"☀️ 切換為淺色",use_container_width=True,key="wc_ui_theme_btn"):
     st.session_state.ui_theme="dark"if st.session_state.get("ui_theme")=="light"else"light"
     st.rerun()
+with st.sidebar.expander("🔑 PageSpeed API 金鑰（選填）", expanded=False):
+    st.caption(
+        "Google PSI API 共用配額有限／金鑰可能過期；若 15.載入速度顯示「API key expired」"
+        "或「RESOURCE_EXHAUSTED」，請至 [Google Cloud Console](https://console.cloud.google.com/apis/credentials) "
+        "建立 PageSpeed Insights API 金鑰後貼至此處。"
+    )
+    _psi_in = st.text_input(
+        "PSI API Key",
+        value=st.session_state.get("psi_api_key", ""),
+        type="password",
+        help="本欄優先於環境變數 PSI_API_KEY 與 secrets.toml；只在本次會話內有效。",
+        key="psi_api_key_input",
+    )
+    if (_psi_in or "").strip():
+        st.session_state["psi_api_key"] = _psi_in.strip()
+        # 同步寫入環境變數，使核心 _pagespeed_api_key() 可在不依賴 Streamlit 的情境下取用
+        import os as _os
+        _os.environ["PSI_API_KEY"] = _psi_in.strip()
+    elif "psi_api_key" in st.session_state:
+        del st.session_state["psi_api_key"]
 
 # ==========================================
 # 頁面1：掃描作業
@@ -302,7 +322,13 @@ if st.session_state.app_mode==APP_MODE_SCAN:
             elif status=="psi":
                 psi=st.session_state.psi_result
                 if psi and psi.get('success'):st.write(f"{'✅' if psi['avg']>=50 else '❌'}**15.載入速度**：{psi['avg']:.1f}分（手機 {psi['m']:.1f}、電腦 {psi['d']:.1f}）")
-                else:st.write(f"⚠️**15.載入速度**：測速失敗")
+                else:
+                    _msg=(psi or {}).get("msg") or "測速失敗"
+                    st.write(f"⚠️**15.載入速度**：{_msg}")
+                    st.caption(
+                        "若顯示 API key expired／RESOURCE_EXHAUSTED：請於環境變數 `PSI_API_KEY` "
+                        "或 `.streamlit/secrets.toml` 內設定自有 PageSpeed Insights API 金鑰後重試。"
+                    )
             elif isinstance(status,str) and status in ["3.語系編碼","5.有效連結","8.傳輸協議","9.動畫格式","10.文件格式"]:
                 fails=st.session_state.failure_report.get(status,[])
                 if not fails:st.write(f"✅**{name}**：符合")
