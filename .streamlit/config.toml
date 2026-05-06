@@ -1,3 +1,12 @@
 # 本機執行時隱藏右上角 Deploy、開發者選單等
 [client]
 toolbarMode = "minimal"
+
+# 固定淺色主題，避免他機因使用者層級設定或系統配色出現黑色區塊
+[theme]
+base = "light"
+primaryColor = "#2563eb"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f0f2f6"
+textColor = "#31333F"
+font = "sans serif"
