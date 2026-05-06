@@ -10,7 +10,7 @@ from webchecker_core import (
     _SCAN_FAV_NONE, _format_fav_select_row, _fav_select_rows,
     ordered_visited_urls_for_export, visited_urls_to_excel_bytes,
     load_favorites, save_favorites, load_config, save_config,
-    normalize_url_input, get_clean_domain, url_in_scan_scope, _site_root_url,
+    normalize_url_input, normalize_external_probe_url, get_clean_domain, url_in_scan_scope, _site_root_url,
     get_pagespeed_score, _run_scan_parallel_batch,
 )
 
@@ -375,7 +375,7 @@ if st.session_state.app_mode==APP_MODE_SCAN:
         )
         st.checkbox("⚡同時執行載入速度檢測(PageSpeedAPI)",key="run_psi")
         # type=secondary：白／淺灰底 + 深色字，避免 primary 紅藍底與 Markdown 內層樣式對比不足（不必調 DevTools）
-        start_scan=st.form_submit_button("🚀 開始掃描",use_container_width=True,type="secondary")
+        start_scan=st.form_submit_button("🚀 開始掃描",use_container_width=True,type="primary")
     raw_custom=(st.session_state.get("scan_url_field")or"").strip()
     custom_first=raw_custom
     pick=st.session_state.get("fav_pick",_SCAN_FAV_NONE)
@@ -471,21 +471,29 @@ if st.session_state.app_mode==APP_MODE_SCAN:
                 st.session_state.visited_order.append(t)
                 _src_map=st.session_state.setdefault("external_probed_source",{})
                 for u in ext_probed:
-                    if u not in st.session_state.external_probed_seen:
-                        st.session_state.external_probed_seen.add(u)
-                        st.session_state.external_probed_order.append(u)
+                    nu=normalize_external_probe_url(u)or u
+                    if nu not in st.session_state.external_probed_seen:
+                        st.session_state.external_probed_seen.add(nu)
+                        st.session_state.external_probed_order.append(nu)
                     # 同一外站可能出現於多個站內頁；逐一附加並去重，保留出現順序。
-                    _lst=_src_map.setdefault(u,[])
+                    _lst=_src_map.setdefault(nu,[])
                     if t not in _lst:
                         _lst.append(t)
                 for k,v in found.items():
                     if v:st.session_state.global_features[k]=True
                 for e in errs:
-                    st.session_state.failure_report.setdefault(e,[]).append(t)
+                    if e=="5.有效連結":
+                        nt=normalize_external_probe_url(t)or t
+                        _lst_e=st.session_state.failure_report.setdefault(e,[])
+                        if nt not in _lst_e:
+                            _lst_e.append(nt)
+                    else:
+                        st.session_state.failure_report.setdefault(e,[]).append(t)
                 fr5=st.session_state.failure_report.setdefault("5.有效連結",[])
                 for u in ext_bad:
-                    if u not in fr5:
-                        fr5.append(u)
+                    nu=normalize_external_probe_url(u)or u
+                    if nu not in fr5:
+                        fr5.append(nu)
                 for l in links:
                     if not url_in_scan_scope(l,_sc):continue
                     if l not in st.session_state.visited_urls:

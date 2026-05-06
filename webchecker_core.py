@@ -3,7 +3,7 @@ from typing import List, Optional, Set, Tuple
 import sys
 
 # 供除錯／版本確認：與 Streamlit 側欄「檢核核心版本」應一致
-SCAN_ENGINE_BUILD = "2026-05-06-p24"
+SCAN_ENGINE_BUILD = "2026-05-06-p26"
 import random
 import requests
 import urllib3
@@ -86,7 +86,7 @@ def visited_urls_to_excel_bytes(
 ):
     """產生含站內掃描與外站之網址清單。
 
-    external_probed_list：彙整後**全部外站 URL**；每一筆皆已做 HEAD/GET 連線驗證（見 probe_external_links_unreachable），
+    external_probed_list：彙整後**全部外站 URL**；每一筆皆已做 GET 連線驗證（見 probe_external_links_unreachable），
     「類型」欄為外站（已連線驗證）。
 
     link_invalid_urls：列入「5.有效連結」不符合清單的網址集合（站內載入失敗或外站探測失敗）；用於「有效連結」欄。
@@ -105,15 +105,21 @@ def visited_urls_to_excel_bytes(
     v=url_list or []
     e=[]if external_probed_list is None else list(external_probed_list)
     bad=link_invalid_urls if link_invalid_urls is not None else None
+    bad_norm=None
+    if bad is not None:
+        bad_norm={normalize_external_probe_url(x)for x in bad if x}
+        bad_norm.discard("")
     src=external_source_map if isinstance(external_source_map,dict)else{}
     rows=[]
     for i,u in enumerate(v,1):
-        lc="—"if bad is None else("不符合"if u in bad else"符合")
+        uk=normalize_external_probe_url(u)if u else""
+        lc="—"if bad_norm is None else("不符合"if uk and uk in bad_norm else"符合")
         rows.append({"序號":i,"掃描網址":u,"類型":"站內掃描","有效連結":lc,"來源站內頁面":"—"})
     off=len(rows)
     for idx,u in enumerate(e):
-        lc="—"if bad is None else("不符合"if u in bad else"符合")
-        srcs=src.get(u)or[]
+        uk=normalize_external_probe_url(u)if u else""
+        lc="—"if bad_norm is None else("不符合"if uk and uk in bad_norm else"符合")
+        srcs=src.get(u)or src.get(uk)or[]
         # 多列來源以換行串接；空集合（極少見：經其他途徑加入而無紀錄）顯示「—」
         srcs_text="\n".join(srcs)if srcs else"—"
         rows.append({"序號":off+idx+1,"掃描網址":u,"類型":"外站（已連線驗證）","有效連結":lc,"來源站內頁面":srcs_text})
@@ -294,6 +300,38 @@ def make_safe_url(url):
         return urlunparse(parsed._replace(path=encoded_path))
     except:
         return url
+
+def normalize_external_probe_url(url:str)->str:
+    """外站 HEAD/GET 驗證與『5.有效連結』／Excel 欄位判斷之**同一鍵**。
+
+    同一連結可能因 **query 參數順序**、**host 大小寫**、**path 編碼形式**、**前後空白** 等微差出現
+    多種字串，導致「探測失敗鍵」與「匯出列掃描網址」不一致，連線可達卻仍顯示不符合。
+    僅做 scheme/host 小寫、path 解編後再編碼、query 依鍵排序後重組；不併合尾端 / 之差異。
+    無 fragment。"""
+    u=(url or"").strip()
+    if not u:
+        return""
+    u=u.split("#",1)[0].strip()
+    if not u:
+        return""
+    try:
+        p=urlparse(u)
+        scheme=(p.scheme or"").lower()
+        if scheme not in("http","https"):
+            return u
+        netloc=(p.netloc or"").lower()
+        if not netloc:
+            return u
+        path=p.path or""
+        if not path:
+            path="/"
+        path=quote(unquote(path),safe="/")
+        pairs=urllib.parse.parse_qsl(p.query,keep_blank_values=True)
+        pairs.sort(key=lambda kv:(kv[0],kv[1]))
+        q=urllib.parse.urlencode(pairs,doseq=True)
+        return urlunparse((scheme,netloc,path,"",q,""))
+    except Exception:
+        return u
 
 # 掃描／下載連結副檔名（含 OpenDocument；連結可見文字以此結尾者一律納入檢核）
 _SCAN_FILE_EXTENSIONS=(".pdf",".doc",".docx",".xls",".xlsx",".ppt",".pptx",".rar",".zip",".odt",".ods",".odp")
@@ -527,7 +565,9 @@ def extract_external_http_links(html:str,page_url:str,site_host:str)->set:
             continue
         if len(full)>4096:
             continue
-        out.add(full)
+        nu=normalize_external_probe_url(full)
+        if nu:
+            out.add(nu)
     return out
 
 async def _external_http_hrefs_from_item_live_dom(page, page_url: str, site_host: str) -> set:
@@ -568,7 +608,7 @@ async def _external_http_hrefs_from_item_live_dom(page, page_url: str, site_host
         )
     except Exception:
         return set()
-    return {u for u in (hrefs or []) if u}
+    return {normalize_external_probe_url(u) for u in (hrefs or []) if u and normalize_external_probe_url(u)}
 
 def _http_status_reachable_for_external_check(status:int)->bool:
     if status is None:
@@ -577,7 +617,8 @@ def _http_status_reachable_for_external_check(status:int)->bool:
         return True
     if status in(401,403,407,429):
         return True
-    if status==503:
+    # 閘道／逾時類多為暫態，實務上與 503 類似：避免掃描當下誤列「不符合」
+    if status in(502,503,504):
         return True
     return False
 
@@ -718,20 +759,13 @@ def _probe_url_variants_trailing_slash(u:str):
         pass
 
 def _try_probe_single_url(url:str,headers:dict)->bool:
-    """對單一 URL 先 HEAD；若未判定為可連線（含少見 4xx）一律再試 GET 複核。
+    """以 **GET（stream）** 判定外站是否可連，與瀏覽器實際載入較一致。
 
-    部分主機對 HEAD 回 404/405/501 或**非列表內之 4xx**，但 GET 仍正常；舊版僅對固定幾種
-    HEAD 狀態改試 GET，其餘直接 False，易與瀏覽器不一致。
+    舊版先 HEAD 且常在 HEAD 2xx 時直接視為可達、不送 GET，易與現場 WAF／節流／僅封 HEAD
+    的行為不一致而**假陰性**。另：舊版對「探測失敗」做快取後，同一掃描工作階段內會
+    長時間短路為失效（見 `probe_external_links_unreachable` 註解）。
 
-    社群／分享頁（Facebook sharer 等）對 HEAD 也會回 400+text/html，瀏覽器仍可正常開啟；
-    本函式在 HEAD 端同樣套用「400 且回 HTML 視為可達」之放寬規則。
-
-    額外：若 HTTP 回 200 但內文為下列兩種情況之一，仍視為失效：
-      (a) 縮網址服務（reurl.cc、lihi.cc、pse.is、bit.ly…）顯示「轉址失敗／找不到該網址」
-          → 該短網址已不存在或已被刪除。
-      (b) Body < 1.5KB 且只含 `window.location` 類 JS 跳轉（停車／導流頁特徵）
-          → 原網址早已下線、域名被改作其他用途。
-    這兩種情況 HEAD 帶不出蛛絲馬跡，必須讀取 GET 內文才能辨識。"""
+    仍保留：縮址軟 404、極短 JS 停車頁之內文判斷（皆需讀取回應本文）。"""
     def ok_status(code:Optional[int])->bool:
         return _http_status_reachable_for_external_check(code)
     try:
@@ -755,28 +789,12 @@ def _try_probe_single_url(url:str,headers:dict)->bool:
         return True
 
     try:
-        r=requests.head(url,headers=headers,timeout=_PROBE_REQ_TIMEOUT,allow_redirects=True,verify=False)
-        sc=r.status_code
-        ct=(r.headers.get("content-type")or"").lower()
-        head_ok=ok_status(sc) or (sc==400 and("text/html"in ct or"/html"in ct or"html"in ct))
-        if head_ok:
-            # 縮網址的 HEAD 也會 200（後端服務本身存在），需 GET 拿內文確認；
-            # 同樣，極短停車頁可能 HEAD 200，body 才看得出 JS-only 跳轉，故統一以 GET 複核。
-            if is_shortener:
-                return _get_and_validate()
-            # 一般情形：HEAD 200 直接視為可達；停車頁多半 HEAD 405 或 GET 才看得到，下方 except 路徑覆蓋。
-            return True
-        # 非 ok 狀態 → 試 GET（含 body 檢查）
         return _get_and_validate()
     except Exception:
-        pass
-    return _get_and_validate()
+        return False
 
 def _probe_external_url_sync(url:str,referer:str)->bool:
-    """以 HEAD 先詢、必要時再 GET 粗查外部網址（verify=False）。
-
-    許多主機未實作 HEAD 或回 404，實際 GET 仍 200，僅以 HEAD 會誤列「不符合」；另若連線/SSL
-    在 HEAD 失敗也會再試 GET。
+    """以 GET（stream）粗查外部網址是否可連（verify=False）；底層見 `_try_probe_single_url`。
 
     **http→https 優先**：若 href 為 `http://`，先試同 host／path／query 的 `https://`，再試原 URL。
     避免「http 只 302 到已換網域之中繼站」導致 DNS/SSL 失敗，而瀏覽器直接開 https 首頁卻正常
@@ -870,13 +888,15 @@ async def probe_external_links_unreachable(
 )->Tuple[List[str],List[str]]:
     """(無法連線或 HTTP 判定失效, 掃到之**全部**外站 URL 字母序清單)。
 
-    **每一筆**外站 URL 皆會實際送出 HEAD/GET 驗證（已快取者不重複請求）。單頁外站極多時掃描會變慢，
-    屬預期行為。probe_cache 鍵為完整 URL，值為是否可連。
+    **每一筆**外站 URL 皆會實際 GET 驗證（已快取**成功**者不重複請求）。**不再**對「曾失敗」快取短路。
+    單頁外站極多時掃描會變慢，屬預期行為。probe_cache 鍵為完整 URL，值為是否可連。
     probe_sem：同一批並行掃描頁面共用，限制全批外站 HTTP 總併發。
     """
     if not urls:
         return [], []
-    all_sorted=sorted(urls)
+    norm={normalize_external_probe_url(x)for x in urls if x}
+    norm.discard("")
+    all_sorted=sorted(norm)
     sem=probe_sem if probe_sem is not None else asyncio.Semaphore(_BATCH_EXTERNAL_PROBE_CONCURRENCY)
     failed=[]
 
@@ -884,8 +904,6 @@ async def probe_external_links_unreachable(
         cached = _probe_cache_get(probe_cache, u, fail_ttl_s=600)
         if cached is True:
             return None
-        if cached is False:
-            return u
         async with sem:
             ok=await asyncio.to_thread(_probe_external_url_sync,u,referer)
         _probe_cache_set(probe_cache, u, ok)
