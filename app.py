@@ -92,6 +92,8 @@ if isinstance(st.session_state.get("fav_pick"),str):st.session_state.fav_pick=_S
 if "visited_order"not in st.session_state:st.session_state.visited_order=[]
 if "external_probed_order"not in st.session_state:st.session_state.external_probed_order=[]
 if "external_probed_seen"not in st.session_state:st.session_state.external_probed_seen=set()
+# 紀錄每個外站 URL 來自哪些站內頁面（依出現順序保留、去重）；供 Excel「來源站內頁面」欄使用。
+if "external_probed_source"not in st.session_state:st.session_state.external_probed_source={}
 
 st.sidebar.title("🗂️系統選單")
 scan_btn=st.sidebar.button(APP_MODE_SCAN,use_container_width=True,type="primary" if st.session_state.app_mode==APP_MODE_SCAN else "secondary")
@@ -108,26 +110,6 @@ st.sidebar.caption("外觀")
 if st.sidebar.button("🌙 切換為深色"if st.session_state.get("ui_theme")=="light"else"☀️ 切換為淺色",use_container_width=True,key="wc_ui_theme_btn"):
     st.session_state.ui_theme="dark"if st.session_state.get("ui_theme")=="light"else"light"
     st.rerun()
-with st.sidebar.expander("🔑 PageSpeed API 金鑰（選填）", expanded=False):
-    st.caption(
-        "Google PSI API 共用配額有限／金鑰可能過期；若 15.載入速度顯示「API key expired」"
-        "或「RESOURCE_EXHAUSTED」，請至 [Google Cloud Console](https://console.cloud.google.com/apis/credentials) "
-        "建立 PageSpeed Insights API 金鑰後貼至此處。"
-    )
-    _psi_in = st.text_input(
-        "PSI API Key",
-        value=st.session_state.get("psi_api_key", ""),
-        type="password",
-        help="本欄優先於環境變數 PSI_API_KEY 與 secrets.toml；只在本次會話內有效。",
-        key="psi_api_key_input",
-    )
-    if (_psi_in or "").strip():
-        st.session_state["psi_api_key"] = _psi_in.strip()
-        # 同步寫入環境變數，使核心 _pagespeed_api_key() 可在不依賴 Streamlit 的情境下取用
-        import os as _os
-        _os.environ["PSI_API_KEY"] = _psi_in.strip()
-    elif "psi_api_key" in st.session_state:
-        del st.session_state["psi_api_key"]
 
 # ==========================================
 # 頁面1：掃描作業
@@ -141,6 +123,7 @@ if st.session_state.app_mode==APP_MODE_SCAN:
         st.session_state.visited_order=[]
         st.session_state.external_probed_order=[]
         st.session_state.external_probed_seen=set()
+        st.session_state.external_probed_source={}
         if "scan_scope_root" in st.session_state:del st.session_state["scan_scope_root"]
         if "_wc_scan_host_concurrency" in st.session_state:del st.session_state["_wc_scan_host_concurrency"]
         if "_scan_page_exceptions" in st.session_state:del st.session_state["_scan_page_exceptions"]
@@ -188,6 +171,7 @@ if st.session_state.app_mode==APP_MODE_SCAN:
             st.session_state.visited_order=[]
             st.session_state.external_probed_order=[]
             st.session_state.external_probed_seen=set()
+            st.session_state.external_probed_source={}
             st.session_state.failure_report={}
             st.session_state["_wc_external_url_probe_cache"]={}
             st.session_state.global_features={k:False for k in ["favicon","privacy","security","phone","address","open_data","accessibility","nav","lang_ver","search","opinion","rwd","stats","date_info"]}
@@ -260,10 +244,15 @@ if st.session_state.app_mode==APP_MODE_SCAN:
                 errs,html,found,links,final_url,ext_bad,ext_probed=res
                 st.session_state.visited_urls.add(t)
                 st.session_state.visited_order.append(t)
+                _src_map=st.session_state.setdefault("external_probed_source",{})
                 for u in ext_probed:
                     if u not in st.session_state.external_probed_seen:
                         st.session_state.external_probed_seen.add(u)
                         st.session_state.external_probed_order.append(u)
+                    # 同一外站可能出現於多個站內頁；逐一附加並去重，保留出現順序。
+                    _lst=_src_map.setdefault(u,[])
+                    if t not in _lst:
+                        _lst.append(t)
                 for k,v in found.items():
                     if v:st.session_state.global_features[k]=True
                 for e in errs:
@@ -292,7 +281,8 @@ if st.session_state.app_mode==APP_MODE_SCAN:
         _ord=_ordered_visited_urls_for_export()
         _ext=st.session_state.get("external_probed_order")or[]
         _fr5=set((st.session_state.failure_report or{}).get("5.有效連結")or[])
-        _xlsx=visited_urls_to_excel_bytes(_ord,_ext,_fr5)
+        _src_map=st.session_state.get("external_probed_source")or{}
+        _xlsx=visited_urls_to_excel_bytes(_ord,_ext,_fr5,external_source_map=_src_map)
         _fn=f"掃描網址清單_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
         st.download_button(
             "📥 下載掃描網址清單（Excel）",
@@ -325,10 +315,6 @@ if st.session_state.app_mode==APP_MODE_SCAN:
                 else:
                     _msg=(psi or {}).get("msg") or "測速失敗"
                     st.write(f"⚠️**15.載入速度**：{_msg}")
-                    st.caption(
-                        "若顯示 API key expired／RESOURCE_EXHAUSTED：請於環境變數 `PSI_API_KEY` "
-                        "或 `.streamlit/secrets.toml` 內設定自有 PageSpeed Insights API 金鑰後重試。"
-                    )
             elif isinstance(status,str) and status in ["3.語系編碼","5.有效連結","8.傳輸協議","9.動畫格式","10.文件格式"]:
                 fails=st.session_state.failure_report.get(status,[])
                 if not fails:st.write(f"✅**{name}**：符合")

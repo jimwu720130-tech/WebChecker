@@ -3,7 +3,7 @@ from typing import List, Optional, Set, Tuple
 import sys
 
 # 供除錯／版本確認：與 Streamlit 側欄「檢核核心版本」應一致
-SCAN_ENGINE_BUILD = "2026-05-05-p14"
+SCAN_ENGINE_BUILD = "2026-05-06-p21"
 import random
 import requests
 import urllib3
@@ -22,6 +22,13 @@ import html as html_stdlib
 from datetime import datetime, timedelta
 from pathlib import PurePosixPath
 from playwright.async_api import async_playwright
+
+# recycle.eri.com.tw utmap 店家詳情：首屏 HTML 常僅殼層，「官方網址」等欄位晚數百 ms 才由 API 注入；併發掃描時若略早取
+# `page.content()`，會漏掉外站 href，Excel 即無該外站列（但站內列「符合」仍在）。
+_UTMAP_STATION_DETAIL_PATH_RE=re.compile(
+    r"/utmap/stations/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+    re.I,
+)
 
 # 與側邊選單頁面切換一致（勿與按鈕文案脫鉤）
 APP_MODE_SCAN="🔍執行全站掃描"
@@ -60,7 +67,10 @@ def ordered_visited_urls_for_export(visited_urls:Set[str],visited_order:Optional
 def _fav_select_rows(favs):
     return[_SCAN_FAV_NONE]+[(x.get("id",""),x.get("name",""),x.get("url","")) for x in favs]
 
-def visited_urls_to_excel_bytes(url_list, external_probed_list=None, link_invalid_urls:Optional[Set[str]]=None):
+def visited_urls_to_excel_bytes(
+    url_list, external_probed_list=None, link_invalid_urls:Optional[Set[str]]=None,
+    external_source_map:Optional[dict]=None,
+):
     """產生含站內掃描與外站之網址清單。
 
     external_probed_list：彙整後**全部外站 URL**；每一筆皆已做 HEAD/GET 連線驗證（見 probe_external_links_unreachable），
@@ -68,22 +78,44 @@ def visited_urls_to_excel_bytes(url_list, external_probed_list=None, link_invali
 
     link_invalid_urls：列入「5.有效連結」不符合清單的網址集合（站內載入失敗或外站探測失敗）；用於「有效連結」欄。
     若為 None，該欄一律填「—」（相容舊呼叫端）。
+
+    external_source_map：{外站 URL: [出現該連結之站內頁面 URL, ...]}；用於「來源站內頁面」欄。
+    站內列固定填「—」；外站列以換行串接所有來源頁，配合 wrap_text 顯示多行。
     """
     v=url_list or []
     e=[]if external_probed_list is None else list(external_probed_list)
     bad=link_invalid_urls if link_invalid_urls is not None else None
+    src=external_source_map if isinstance(external_source_map,dict)else{}
     rows=[]
     for i,u in enumerate(v,1):
         lc="—"if bad is None else("不符合"if u in bad else"符合")
-        rows.append({"序號":i,"掃描網址":u,"類型":"站內掃描","有效連結":lc})
+        rows.append({"序號":i,"掃描網址":u,"類型":"站內掃描","有效連結":lc,"來源站內頁面":"—"})
     off=len(rows)
     for idx,u in enumerate(e):
         lc="—"if bad is None else("不符合"if u in bad else"符合")
-        rows.append({"序號":off+idx+1,"掃描網址":u,"類型":"外站（已連線驗證）","有效連結":lc})
+        srcs=src.get(u)or[]
+        # 多列來源以換行串接；空集合（極少見：經其他途徑加入而無紀錄）顯示「—」
+        srcs_text="\n".join(srcs)if srcs else"—"
+        rows.append({"序號":off+idx+1,"掃描網址":u,"類型":"外站（已連線驗證）","有效連結":lc,"來源站內頁面":srcs_text})
     buf=BytesIO()
-    df=pd.DataFrame(rows)if rows else pd.DataFrame({"序號":[],"掃描網址":[],"類型":[],"有效連結":[]})
-    with pd.ExcelWriter(buf,engine="xlsxwriter") as writer:
+    cols=["序號","掃描網址","類型","有效連結","來源站內頁面"]
+    df=pd.DataFrame(rows,columns=cols)if rows else pd.DataFrame({c:[]for c in cols})
+    # 關閉 xlsxwriter 之 strings_to_urls 自動轉超連結：
+    # Excel 對單一超連結 URL 有約 255 字元上限，本工具的同網域中文 PDF（含 %xx 編碼）與
+    # 社群分享網址常超過此限，xlsxwriter 仍會嵌入超連結欄位導致開檔被警告「內容有問題」；
+    # 全表保留為純字串可避免該警告（仍可在 Excel 中按右鍵手動加入超連結）。
+    engine_kw={"options":{"strings_to_urls":False}}
+    with pd.ExcelWriter(buf,engine="xlsxwriter",engine_kwargs=engine_kw) as writer:
         df.to_excel(writer,index=False,sheet_name="掃描清單")
+        # 為「掃描網址」與「來源站內頁面」啟用自動換行；其餘設合理欄寬以利閱讀。
+        wb=writer.book;ws=writer.sheets["掃描清單"]
+        wrap_fmt=wb.add_format({"text_wrap":True,"valign":"top"})
+        plain_fmt=wb.add_format({"valign":"top"})
+        ws.set_column(0,0,6,plain_fmt)         # 序號
+        ws.set_column(1,1,72,wrap_fmt)         # 掃描網址
+        ws.set_column(2,2,20,plain_fmt)        # 類型
+        ws.set_column(3,3,10,plain_fmt)        # 有效連結
+        ws.set_column(4,4,72,wrap_fmt)         # 來源站內頁面
     buf.seek(0)
     return buf.getvalue()
 
@@ -511,15 +543,113 @@ def _build_external_probe_headers(referer:str)->dict:
     h["Upgrade-Insecure-Requests"]="1"
     return h
 
-def _get_probe_get_result(url:str,headers:dict)->int:
+# 常見「縮網址服務」host：對方 HTTP 仍 200，但內文寫『轉址失敗／找不到該網址』即代表
+# 原縮址已失效，瀏覽器點擊後使用者看到的是錯誤頁。需於 probe 階段一併偵測為失效。
+_URL_SHORTENER_HOSTS = {
+    "reurl.cc","lihi.cc","lihi1.cc","lihi2.cc","lihi3.cc","lihi.io","lihi.com",
+    "pse.is","psee.io","bit.ly","goo.gl","tinyurl.com","t.co",
+    "ppt.cc","0rz.tw","is.gd","buff.ly","s.id","cutt.ly",
+}
+
+# 縮網址「找不到該短址」之高鑑別度提示語：須確切點名「不存在／找不到／已過期／已失效」，
+# 避免短址服務暫時忙碌（出現『系統忙碌中』之類）時誤殺有效連結。
+_SHORTENER_NOT_FOUND_TEXTS = (
+    "找不到該網址","短網址不存在","短網址已失效","網址不存在","網址已失效","已過期",
+    "Short URL not found","URL not found","Link not found","Link is invalid",
+    "Link expired","does not exist","not been found",
+)
+
+
+def _host_is_url_shortener(host:str)->bool:
+    if not host:
+        return False
+    h=host.lower().lstrip(".")
+    if h.startswith("www."):h=h[4:]
+    if h in _URL_SHORTENER_HOSTS:
+        return True
+    return any(h.endswith("."+d) for d in _URL_SHORTENER_HOSTS)
+
+
+def _looks_like_shortener_soft_404(host:str,body_text:str)->bool:
+    """縮網址後台說「找不到」的軟性 404；HTTP 仍 200 但內容明示連結失效。
+
+    僅以「找不到／不存在／已過期」之精準字串為判定依據，避免短網址服務暫時忙碌時誤判。
+    """
+    if not body_text or not _host_is_url_shortener(host):
+        return False
+    return any(p in body_text for p in _SHORTENER_NOT_FOUND_TEXTS)
+
+
+# 純 JS 轉址停車頁特徵：body 極短、僅含 `window.location` 跳轉，無人類可讀內容。
+# 例（yilannews.xyz/?p=…）：
+#   <!DOCTYPE html><html><head><script>window.onload=function(){window.location.href="/lander?…"}</script></head></html>
+# 此類網址原文章已下線，網域被當成停車／導流頁，視同失效；應自 5.有效連結 視角列入失敗。
+_JS_REDIRECT_HINTS=("window.location","location.replace","location.assign","location.href")
+
+
+def _looks_like_js_redirect_parking(body_text:str)->bool:
+    if not body_text:
+        return False
+    snippet=body_text[:2048]
+    if len(snippet)>1500:
+        return False
+    low=snippet.lower()
+    if not any(h in low for h in _JS_REDIRECT_HINTS):
+        if "<meta" in low and "http-equiv" in low and "refresh" in low:
+            pass # meta refresh 也算
+        else:
+            return False
+    # 去掉 <script>...</script> 與所有標籤後內容應極短：典型停車頁清掉後僅剩空白
+    text_only=re.sub(r"<script[\s\S]*?</script>","",snippet,flags=re.I)
+    text_only=re.sub(r"<style[\s\S]*?</style>","",text_only,flags=re.I)
+    text_only=re.sub(r"<[^>]+>","",text_only).strip()
+    return len(text_only)<30
+
+
+def _read_response_text_snippet(r,max_bytes:int=8192)->str:
+    """從 streaming Response 讀最多 max_bytes 解碼成字串；非 HTML/text 直接回空。"""
+    ct=(r.headers.get("content-type")or"").lower()
+    if ct and ("text/" not in ct and "html" not in ct and "xml" not in ct and "json" not in ct):
+        return ""
+    try:
+        chunks,total=[],0
+        for chunk in r.iter_content(chunk_size=2048,decode_unicode=False):
+            if chunk is None:break
+            chunks.append(chunk)
+            total+=len(chunk)
+            if total>=max_bytes:break
+        raw=b"".join(chunks)
+    except Exception:
+        return ""
+    # encoding：依 r.apparent_encoding 或 utf-8 fallback
+    enc=(r.encoding or"").lower()
+    if not enc or enc in("iso-8859-1",):
+        # iso-8859-1 是 requests 對未指定 charset 時之預設，對中文站台幾乎都不對；改 utf-8
+        enc="utf-8"
+    try:
+        return raw.decode(enc,errors="ignore")
+    except Exception:
+        try:
+            return raw.decode("utf-8",errors="ignore")
+        except Exception:
+            return ""
+
+
+def _get_probe_get_result(url:str,headers:dict)->Tuple[int,str,str]:
+    """送 GET，回傳 (status_code, content_type, body_snippet[≤8KB])。
+    body_snippet 用於『soft-404／JS 停車頁』檢查；非 HTML 內容回空字串以省頻寬。
+    """
     r=requests.get(url,headers=headers,timeout=_PROBE_REQ_TIMEOUT,allow_redirects=True,verify=False,stream=True)
     try:
         code=r.status_code
         ct=(r.headers.get("content-type")or"").lower()
         # 部分社群（如 Facebook sharer）對程式請求回 400，但 Content-Type 仍為 HTML／或 charset 帶引號
         if code==400 and("text/html"in ct or"/html"in ct or"html"in ct):
-            return 200
-        return code
+            code=200
+        body=""
+        if code<400 and ("text/html"in ct or"html"in ct or"text/"in ct or not ct):
+            body=_read_response_text_snippet(r)
+        return code,ct,body
     finally:
         try:
             r.close()
@@ -546,26 +676,53 @@ def _try_probe_single_url(url:str,headers:dict)->bool:
     HEAD 狀態改試 GET，其餘直接 False，易與瀏覽器不一致。
 
     社群／分享頁（Facebook sharer 等）對 HEAD 也會回 400+text/html，瀏覽器仍可正常開啟；
-    本函式在 HEAD 端同樣套用「400 且回 HTML 視為可達」之放寬規則。"""
+    本函式在 HEAD 端同樣套用「400 且回 HTML 視為可達」之放寬規則。
+
+    額外：若 HTTP 回 200 但內文為下列兩種情況之一，仍視為失效：
+      (a) 縮網址服務（reurl.cc、lihi.cc、pse.is、bit.ly…）顯示「轉址失敗／找不到該網址」
+          → 該短網址已不存在或已被刪除。
+      (b) Body < 1.5KB 且只含 `window.location` 類 JS 跳轉（停車／導流頁特徵）
+          → 原網址早已下線、域名被改作其他用途。
+    這兩種情況 HEAD 帶不出蛛絲馬跡，必須讀取 GET 內文才能辨識。"""
     def ok_status(code:Optional[int])->bool:
         return _http_status_reachable_for_external_check(code)
     try:
+        host=urlparse(url).netloc
+    except Exception:
+        host=""
+    is_shortener=_host_is_url_shortener(host)
+
+    def _get_and_validate()->bool:
+        try:
+            code,_ct,body=_get_probe_get_result(url,headers)
+        except Exception:
+            return False
+        if not ok_status(code):
+            return False
+        if body:
+            if is_shortener and _looks_like_shortener_soft_404(host,body):
+                return False
+            if _looks_like_js_redirect_parking(body):
+                return False
+        return True
+
+    try:
         r=requests.head(url,headers=headers,timeout=_PROBE_REQ_TIMEOUT,allow_redirects=True,verify=False)
         sc=r.status_code
-        if ok_status(sc):
-            return True
         ct=(r.headers.get("content-type")or"").lower()
-        if sc==400 and("text/html"in ct or"/html"in ct or"html"in ct):
+        head_ok=ok_status(sc) or (sc==400 and("text/html"in ct or"/html"in ct or"html"in ct))
+        if head_ok:
+            # 縮網址的 HEAD 也會 200（後端服務本身存在），需 GET 拿內文確認；
+            # 同樣，極短停車頁可能 HEAD 200，body 才看得出 JS-only 跳轉，故統一以 GET 複核。
+            if is_shortener:
+                return _get_and_validate()
+            # 一般情形：HEAD 200 直接視為可達；停車頁多半 HEAD 405 或 GET 才看得到，下方 except 路徑覆蓋。
             return True
-        code=_get_probe_get_result(url,headers)
-        return ok_status(code)
+        # 非 ok 狀態 → 試 GET（含 body 檢查）
+        return _get_and_validate()
     except Exception:
         pass
-    try:
-        code=_get_probe_get_result(url,headers)
-        return ok_status(code)
-    except Exception:
-        return False
+    return _get_and_validate()
 
 def _probe_external_url_sync(url:str,referer:str)->bool:
     """以 HEAD 先詢、必要時再 GET 粗查外部網址（verify=False）。
@@ -1273,10 +1430,91 @@ async def _try_advance_pagination_vue_div_pages_playwright(page, st0) -> bool:
                 return True
     return False
 
+async def _try_advance_pagination_numeric_buttons(page, st0) -> bool:
+    """Vue／Tailwind 風格的『純數字 <button> 分頁』，無 .pagination class 提示。
+
+    例：/utmap/stations 用 `<button>1</button>...<button>5</button>` 排列頁碼，現行 fallback
+    只篩 `<a>` 數字節點 → 抓不到。本函式以「同列、相鄰、連續整數、有高亮樣式」為共同特徵
+    辨識分頁列，並前進到當前頁碼+1。為降低誤觸（如評分 1～5 之類數字按鈕），要求：
+      ① 同一 Y 列至少 3 顆數字按鈕
+      ② 數字 X 座標由小至大且皆 >0（同列）
+      ③ 必須能找到目前 active 按鈕（class 含 active/selected 或 bg-* 高亮、aria-current=page）
+    """
+    info = await page.evaluate("""() => {
+      const all = Array.from(document.querySelectorAll('button'));
+      const nums = [];
+      for (const b of all) {
+        const t = (b.innerText || '').trim();
+        if (!/^\\d+$/.test(t)) continue;
+        const r = b.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) continue;
+        const cls = (b.className || '').toLowerCase();
+        const aria = (b.getAttribute('aria-current') || '').toLowerCase();
+        // 高亮樣式：原生 active/selected/current，或常見 Tailwind 主色配白字（bg-* + text-white）
+        const tailwindActive = /text-white/.test(cls) && /bg-(?:slate|gray|primary|blue|indigo|cyan|sky|teal|emerald|red|rose|orange|amber|yellow|green|purple|pink)/.test(cls);
+        const active = aria === 'page' || /\\b(active|selected|current)\\b/.test(cls) || tailwindActive;
+        nums.push({n: parseInt(t,10), x: r.x, y: r.y, active});
+      }
+      if (nums.length < 3) return null;
+      // 以 Y 座標 ±10px 分群，挑最大群（最像分頁列）
+      const groups = [];
+      for (const it of nums) {
+        let g = groups.find(g => Math.abs(g.y - it.y) < 10);
+        if (!g) { g = {y: it.y, items: []}; groups.push(g); }
+        g.items.push(it);
+      }
+      groups.sort((a,b) => b.items.length - a.items.length);
+      const best = groups[0];
+      if (!best || best.items.length < 3) return null;
+      best.items.sort((a,b) => a.x - b.x);
+      // 連續性：相鄰 items 之 n 差距須 ≤ 1（允許起始為 1 或更高）
+      const ns = best.items.map(it => it.n);
+      for (let i = 1; i < ns.length; i++) {
+        if (ns[i] - ns[i-1] !== 1) return null;
+      }
+      const cur = best.items.find(it => it.active);
+      if (!cur) return null;
+      return { curN: cur.n, ns: ns };
+    }""")
+    if not info:
+        return False
+    cur=info.get("curN")
+    ns=info.get("ns") or []
+    if not isinstance(cur,int) or not isinstance(ns,list) or len(ns)<3:
+        return False
+    target=cur+1 if (cur+1) in ns else None
+    if target is None:
+        return False
+    btn=page.get_by_role("button",name=re.compile(rf"^\s*{target}\s*$"))
+    try:
+        bn=await btn.count()
+    except Exception:
+        bn=0
+    for i in range(min(bn,10)):
+        el=btn.nth(i)
+        if not await _try_advance_pagination__clickable_guess(el):
+            continue
+        try:
+            await el.scroll_into_view_if_needed()
+            await el.click(timeout=15000)
+        except Exception:
+            continue
+        await page.wait_for_timeout(2200)
+        try:
+            await page.wait_for_load_state("domcontentloaded",timeout=8000)
+        except Exception:
+            pass
+        if await _pagination_state_key(page) != st0:
+            return True
+    return False
+
+
 async def try_advance_pagination(page)->bool:
     """點擊下一頁／下頁／pager 箭頭；若列表內文有變化則視為成功。"""
     st0=await _pagination_state_key(page)
     if await _try_advance_pagination_vue_div_pages_playwright(page, st0):
+        return True
+    if await _try_advance_pagination_numeric_buttons(page, st0):
         return True
 
     async def _clickable(el)->bool:
@@ -1747,28 +1985,24 @@ def check_flash_or_legacy_ria(html:str,soup)->bool:
 # ==========================================
 # PageSpeed API測速邏輯
 # ==========================================
-# Google PageSpeed Insights v5 API 可在「不帶 API key」下使用，但每日總額較低且共用配額；
-# 若使用者在 .streamlit/secrets.toml 或環境變數 PSI_API_KEY 設定自有 key，將優先使用。
+# Google PageSpeed Insights v5 API；金鑰直接內嵌（依使用者設定）。
 PAGESPEED_API_BASE = "https://www.googleapis.com/pagespeedonline/v5/runPagespeed"
+PAGESPEED_API_KEY = "AIzaSyCLV-l5EioNaDOm7ytU399DByBFiJ_jjNs"
+# Lighthouse 偶發暫時性失敗（500 + "Something went wrong" / "FAILED_DOCUMENT_REQUEST" / 502/503/504）：
+# 屬 Google 後端非穩定情境，重試常能恢復；針對下列 HTTP 與訊息特徵自動重試。
+_PSI_RETRYABLE_HTTP = (429, 500, 502, 503, 504)
+_PSI_RETRYABLE_MSG_FRAGMENTS = (
+    "lighthouse returned error",
+    "something went wrong",
+    "failed_document_request",
+    "no_fcp",
+    "no_lcp",
+    "internal error",
+    "deadline",
+    "rate limit",
+)
 
-def _pagespeed_api_key()->str:
-    """讀取 PSI_API_KEY 環境變數；亦支援 Streamlit secrets（若可載入）。"""
-    k = (os.environ.get("PSI_API_KEY") or "").strip()
-    if k:
-        return k
-    try:
-        import streamlit as st  # 僅當在 Streamlit 環境內載入；CLI/單元測試時忽略
-        try:
-            v = st.secrets.get("PSI_API_KEY", "")  # type: ignore[attr-defined]
-            if v:
-                return str(v).strip()
-        except Exception:
-            pass
-    except Exception:
-        pass
-    return ""
-
-def _pagespeed_call(url:str, strategy:str, api_key:str):
+def _pagespeed_call_once(url:str, strategy:str, api_key:str):
     """單次 PSI 呼叫；回傳 (status_code, json_or_None, friendly_error_msg)。"""
     qs = f"url={requests.utils.quote(url, safe='')}&strategy={strategy}"
     if api_key:
@@ -1801,9 +2035,29 @@ def _pagespeed_call(url:str, strategy:str, api_key:str):
         msg = f"PSI HTTP {r.status_code}"
     return r.status_code, j, msg
 
+def _pagespeed_is_retryable(status:int, msg:str)->bool:
+    if status in _PSI_RETRYABLE_HTTP:
+        return True
+    low = (msg or "").lower()
+    return any(frag in low for frag in _PSI_RETRYABLE_MSG_FRAGMENTS)
+
+def _pagespeed_call(url:str, strategy:str, api_key:str, max_attempts:int=3):
+    """PSI 呼叫含暫時性失敗自動重試（Lighthouse 偶發 500、502/503/504、限流等）。"""
+    last = (0, None, "")
+    for attempt in range(1, max_attempts + 1):
+        sc, j, msg = _pagespeed_call_once(url, strategy, api_key)
+        if sc == 200 and j:
+            return sc, j, msg
+        last = (sc, j, msg)
+        if attempt >= max_attempts or not _pagespeed_is_retryable(sc, msg):
+            break
+        # 退避：依次 5s / 10s，第三次直接結束。
+        time.sleep(5 * attempt)
+    return last
+
 def get_pagespeed_score(url):
     """回傳 (success, avg, mobile, desktop, msg)。msg 為失敗時的細節訊息（含 API 端錯誤理由）。"""
-    api_key = _pagespeed_api_key()
+    api_key = PAGESPEED_API_KEY
     sc_m, j_m, err_m = _pagespeed_call(url, "mobile", api_key)
     sc_d, j_d, err_d = _pagespeed_call(url, "desktop", api_key)
     def _score(j):
@@ -1811,19 +2065,26 @@ def get_pagespeed_score(url):
             return float(j["lighthouseResult"]["categories"]["performance"]["score"]) * 100.0
         except Exception:
             return 0.0
+    # 兩端皆成功：取平均
     if sc_m == 200 and sc_d == 200 and j_m and j_d:
         m = _score(j_m); d = _score(j_d)
         return True, (m + d) / 2.0, m, d, "測試成功"
+    # 單端成功：仍回傳該端分數，平均以該端值代之；訊息註明對側失敗。
+    if sc_m == 200 and j_m:
+        m = _score(j_m); d = 0.0
+        return True, m, m, d, f"電腦端失敗（{err_d or 'PSI 暫時無法分析'}）；以行動端分數為準"
+    if sc_d == 200 and j_d:
+        d = _score(j_d); m = 0.0
+        return True, d, m, d, f"行動端失敗（{err_m or 'PSI 暫時無法分析'}）；以電腦端分數為準"
     parts = []
     if err_m:
         parts.append(f"行動：{err_m}")
     if err_d:
         parts.append(f"電腦：{err_d}")
     msg = "；".join(parts) or "API 錯誤"
-    if "API_KEY_INVALID" in msg or "API key expired" in msg or "API key not valid" in msg:
-        msg += "（請於環境變數 PSI_API_KEY 或 .streamlit/secrets.toml 設定有效金鑰）"
-    elif "RESOURCE_EXHAUSTED" in msg or "Quota exceeded" in msg or "rateLimit" in msg.lower():
-        msg += "（共用配額已用罄；請設定自有 PSI_API_KEY 或稍後再試）"
+    # 屬 Google 端的暫時性失敗 → 提示稍後再試
+    if any(frag in msg.lower() for frag in _PSI_RETRYABLE_MSG_FRAGMENTS) or "PSI 500" in msg or "PSI 502" in msg or "PSI 503" in msg or "PSI 504" in msg:
+        msg += "（Google PSI 後端暫時性錯誤，建議稍後再試）"
     return False, 0.0, 0.0, 0.0, msg
 
 # ==========================================
@@ -1945,6 +2206,15 @@ async def check_single_page(
         except Exception:
             pass
         await page.wait_for_timeout(1200)
+        try:
+            if _UTMAP_STATION_DETAIL_PATH_RE.search(urlparse(safe_url).path or ""):
+                try:
+                    await page.wait_for_load_state("networkidle",timeout=5000)
+                except Exception:
+                    pass
+                await page.wait_for_timeout(800)
+        except Exception:
+            pass
         final_url=page.url
         if urlparse(final_url).netloc.lower()!=target_domain:
             await page.close()
