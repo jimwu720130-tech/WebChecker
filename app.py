@@ -43,15 +43,120 @@ section.main .block-container,.main .block-container{color:#e6edf3!important;}
 section[data-testid="stSidebar"]{background:#1a2332!important;border-right:1px solid #2d3a4d!important;}
 .stSidebar [data-testid="stMarkdownContainer"] p,.stSidebar label,
 .stSidebar .stText,.stSidebar p,.stSidebar span{color:#e6edf3!important;}
-h1,h2,h3,.stMarkdown h1,.stMarkdown h2,.stMarkdown h3,.stMarkdown p,label,p,.stText{color:#e6edf3!important;}
+h1,h2,h3,.stMarkdown h1,.stMarkdown h2,.stMarkdown h3,.stMarkdown p,.stMarkdown li,
+.stMarkdown code,label,.stText{color:#e6edf3!important;}
+/* --- 按鈕（深色）：Primary 藍底白字 / Secondary 灰藍底淺字；含 p 標籤、BaseButton、hover／active／focus --- */
+.stButton > button p,.stButton button p,button[data-testid*="BaseButton"] p,button[data-testid*="BaseButton"] span{
+  color:inherit!important;
+  -webkit-text-fill-color:inherit!important;
+}
+/* Primary：主色與內文 */
+.stButton>button[kind="primary"],.stButton>button[kind="primaryFormSubmit"],
+button[data-testid="stBaseButton-primary"],button[data-testid="stBaseButton-primaryFormSubmit"],button[kind="primaryFormSubmit"],
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"]{
+  background:#2563eb!important;border-color:#2563eb!important;background-image:none!important;
+  color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;
+}
+.stButton>button[kind="primary"] *,.stButton>button[kind="primaryFormSubmit"] *,
+button[data-testid="stBaseButton-primary"] *,button[data-testid="stBaseButton-primaryFormSubmit"] *,button[kind="primaryFormSubmit"] *,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"] *,
+button[data-testid*="stBaseButton-primary"] p,button[kind="primaryFormSubmit"] p,button[kind="primaryFormSubmit"] [class*="st-emotion-cache"],
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"] .stMarkdown,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"] .stMarkdown p,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"] [data-testid="stMarkdownContainer"],
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"] [data-testid="stMarkdownContainer"] p{
+  color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;
+}
+.stButton>button[kind="primary"]:hover,.stButton>button[kind="primary"]:active,.stButton>button[kind="primary"]:focus,.stButton>button[kind="primary"]:focus-visible,
+.stButton>button[kind="primaryFormSubmit"]:hover,.stButton>button[kind="primaryFormSubmit"]:active,.stButton>button[kind="primaryFormSubmit"]:focus,.stButton>button[kind="primaryFormSubmit"]:focus-visible,
+button[data-testid="stBaseButton-primary"]:hover,button[data-testid="stBaseButton-primary"]:active,button[data-testid="stBaseButton-primary"]:focus,button[data-testid="stBaseButton-primary"]:focus-visible,
+button[data-testid="stBaseButton-primaryFormSubmit"]:hover,button[data-testid="stBaseButton-primaryFormSubmit"]:active,button[data-testid="stBaseButton-primaryFormSubmit"]:focus,button[data-testid="stBaseButton-primaryFormSubmit"]:focus-visible,
+button[kind="primaryFormSubmit"]:hover,button[kind="primaryFormSubmit"]:active,button[kind="primaryFormSubmit"]:focus,button[kind="primaryFormSubmit"]:focus-visible,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"]:hover,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"]:active,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"]:focus,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"]:focus-visible{
+  background:#2563eb!important;border-color:#2563eb!important;color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;
+}
+.stButton>button[kind="primary"]:hover *,.stButton>button[kind="primary"]:active *,.stButton>button[kind="primary"]:focus *,.stButton>button[kind="primary"]:focus-visible *,
+.stButton>button[kind="primaryFormSubmit"]:hover *,.stButton>button[kind="primaryFormSubmit"]:active *,.stButton>button[kind="primaryFormSubmit"]:focus *,.stButton>button[kind="primaryFormSubmit"]:focus-visible *,
+button[data-testid="stBaseButton-primary"]:hover *,button[data-testid="stBaseButton-primary"]:active *,button[data-testid="stBaseButton-primary"]:focus *,button[data-testid="stBaseButton-primary"]:focus-visible *,
+button[data-testid="stBaseButton-primaryFormSubmit"]:hover *,button[data-testid="stBaseButton-primaryFormSubmit"]:active *,button[data-testid="stBaseButton-primaryFormSubmit"]:focus *,button[data-testid="stBaseButton-primaryFormSubmit"]:focus-visible *,
+button[kind="primaryFormSubmit"]:hover *,button[kind="primaryFormSubmit"]:active *,button[kind="primaryFormSubmit"]:focus *,button[kind="primaryFormSubmit"]:focus-visible *,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"]:hover *,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"]:active *,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"]:focus *,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"]:focus-visible *{
+  color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;
+}
+/* Secondary：次按鈕 */
+.stButton>button[kind="secondary"],.stButton>button[kind="secondaryFormSubmit"],
+button[data-testid="stBaseButton-secondary"],button[data-testid="stBaseButton-secondaryFormSubmit"],
+button[kind="secondaryFormSubmit"],
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-secondaryFormSubmit"]{
+  background:#2d3a4d!important;border-color:#2d3a4d!important;background-image:none!important;
+  color:#e6edf3!important;-webkit-text-fill-color:#e6edf3!important;
+}
+.stButton>button[kind="secondary"] *,.stButton>button[kind="secondaryFormSubmit"] *,
+button[data-testid="stBaseButton-secondary"] *,button[data-testid="stBaseButton-secondaryFormSubmit"] *,
+button[data-testid="stBaseButton-secondary"] p,button[data-testid="stBaseButton-secondaryFormSubmit"] p,
+button[kind="secondaryFormSubmit"] p,button[kind="secondaryFormSubmit"] [class*="st-emotion-cache"],
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-secondaryFormSubmit"] .stMarkdown,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-secondaryFormSubmit"] .stMarkdown p,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-secondaryFormSubmit"] [data-testid="stMarkdownContainer"],
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-secondaryFormSubmit"] [data-testid="stMarkdownContainer"] p{
+  color:#e6edf3!important;-webkit-text-fill-color:#e6edf3!important;
+}
+.stButton>button[kind="secondary"]:hover,.stButton>button[kind="secondary"]:active,.stButton>button[kind="secondary"]:focus,.stButton>button[kind="secondary"]:focus-visible,
+.stButton>button[kind="secondaryFormSubmit"]:hover,.stButton>button[kind="secondaryFormSubmit"]:active,.stButton>button[kind="secondaryFormSubmit"]:focus,.stButton>button[kind="secondaryFormSubmit"]:focus-visible,
+button[data-testid="stBaseButton-secondary"]:hover,button[data-testid="stBaseButton-secondary"]:active,button[data-testid="stBaseButton-secondary"]:focus,button[data-testid="stBaseButton-secondary"]:focus-visible,
+button[data-testid="stBaseButton-secondaryFormSubmit"]:hover,button[data-testid="stBaseButton-secondaryFormSubmit"]:active,button[data-testid="stBaseButton-secondaryFormSubmit"]:focus,button[data-testid="stBaseButton-secondaryFormSubmit"]:focus-visible,
+button[kind="secondaryFormSubmit"]:hover,button[kind="secondaryFormSubmit"]:active,button[kind="secondaryFormSubmit"]:focus,button[kind="secondaryFormSubmit"]:focus-visible,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-secondaryFormSubmit"]:hover,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-secondaryFormSubmit"]:active,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-secondaryFormSubmit"]:focus,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-secondaryFormSubmit"]:focus-visible{
+  background:#2d3a4d!important;border-color:#2d3a4d!important;color:#e6edf3!important;-webkit-text-fill-color:#e6edf3!important;
+}
+.stButton>button[kind="secondary"]:hover *,.stButton>button[kind="secondary"]:active *,.stButton>button[kind="secondary"]:focus *,.stButton>button[kind="secondary"]:focus-visible *,
+.stButton>button[kind="secondaryFormSubmit"]:hover *,.stButton>button[kind="secondaryFormSubmit"]:active *,.stButton>button[kind="secondaryFormSubmit"]:focus *,.stButton>button[kind="secondaryFormSubmit"]:focus-visible *,
+button[data-testid="stBaseButton-secondary"]:hover *,button[data-testid="stBaseButton-secondary"]:active *,button[data-testid="stBaseButton-secondary"]:focus *,button[data-testid="stBaseButton-secondary"]:focus-visible *,
+button[data-testid="stBaseButton-secondaryFormSubmit"]:hover *,button[data-testid="stBaseButton-secondaryFormSubmit"]:active *,button[data-testid="stBaseButton-secondaryFormSubmit"]:focus *,button[data-testid="stBaseButton-secondaryFormSubmit"]:focus-visible *,
+button[kind="secondaryFormSubmit"]:hover *,button[kind="secondaryFormSubmit"]:active *,button[kind="secondaryFormSubmit"]:focus *,button[kind="secondaryFormSubmit"]:focus-visible *,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-secondaryFormSubmit"]:hover *,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-secondaryFormSubmit"]:active *,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-secondaryFormSubmit"]:focus *,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-secondaryFormSubmit"]:focus-visible *{
+  color:#e6edf3!important;-webkit-text-fill-color:#e6edf3!important;
+}
+.stButton>button[kind="primary"] svg,.stButton>button[kind="primaryFormSubmit"] svg,
+button[data-testid="stBaseButton-primary"] svg,button[data-testid="stBaseButton-primaryFormSubmit"] svg,button[kind="primaryFormSubmit"] svg,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"] svg{
+  fill:#ffffff!important;color:#ffffff!important;
+}
+.stButton>button[kind="secondary"] svg,.stButton>button[kind="secondaryFormSubmit"] svg,
+button[data-testid="stBaseButton-secondary"] svg,button[data-testid="stBaseButton-secondaryFormSubmit"] svg,button[kind="secondaryFormSubmit"] svg,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-secondaryFormSubmit"] svg{
+  fill:#e6edf3!important;color:#e6edf3!important;
+}
 .stTextInput label,.stTextArea label,.stSelectbox label,.stCheckbox label{color:#b8c5d6!important;}
 .stTextInput input,.stTextArea textarea,[data-baseweb="input"] input,[data-baseweb="textarea"] textarea{
   background:#0d1117!important;color:#e6edf3!important;border-color:#2d3a4d!important;
 }
 [data-baseweb="select"]>div{background-color:#0d1117!important;border-color:#2d3a4d!important;}
 [data-baseweb="select"] div[role="combobox"]{color:#e6edf3!important;}
-.stButton>button[kind="secondary"]{background:#2d3a4d!important;color:#e6edf3!important;}
-.stButton>button[kind="primary"]{background:#2563eb!important;color:#fff!important;}
+/* Select 下拉選單（BaseWeb menu/listbox） */
+div[role="listbox"],ul[role="listbox"],[data-baseweb="menu"]{background:#0d1117!important;color:#e6edf3!important;border-color:#2d3a4d!important;}
+div[role="option"],li[role="option"],[data-baseweb="menu"] li{color:#e6edf3!important;}
+div[role="option"][aria-selected="true"],li[role="option"][aria-selected="true"]{background:#1a2332!important;}
+div[role="option"]:hover,li[role="option"]:hover{background:#161b22!important;}
+
+/* Checkbox（BaseWeb）文字/框線/勾勾 */
+[data-baseweb="checkbox"] label,[data-baseweb="checkbox"] span{color:#e6edf3!important;}
+[data-baseweb="checkbox"] svg{fill:#e6edf3!important;}
+[data-baseweb="checkbox"] div[role="checkbox"]{border-color:#b8c5d6!important;background:#0d1117!important;}
+[data-baseweb="checkbox"] div[role="checkbox"][aria-checked="true"]{background:#2563eb!important;border-color:#2563eb!important;}
+
 div[data-testid="stExpander"] details summary,div[data-testid="stExpander"] details summary p,
 div[data-testid="stExpander"] details summary span{color:#e6edf3!important;}
 div[data-testid="stExpander"] .streamlit-expanderContent{background:#161b22!important;}
@@ -64,13 +169,132 @@ hr{border-color:#2d3a4d!important;}
 .stApp,[data-testid="stAppViewContainer"]{background:#ffffff!important;color:#262730!important;}
 section.main .block-container,.main .block-container{color:#262730!important;}
 section[data-testid="stSidebar"]{background:#f0f2f6!important;}
-h1,h2,h3,.stMarkdown p,label,p,.stText{color:#262730!important;}
+h1,h2,h3,.stMarkdown p,.stMarkdown li,.stMarkdown code,label,.stText{color:#262730!important;}
+/* 勿對全域裸 p 上色：st.form_submit_button 標籤內的 <p> 會繼承此色而變成「深底深字」 */
+button[data-testid="stBaseButton-primary"] p,button[data-testid="stBaseButton-primary"] span,
+button[data-testid="stBaseButton-primaryFormSubmit"] p,button[data-testid="stBaseButton-primaryFormSubmit"] span,
+.stButton>button[kind="primary"] p,.stButton>button[kind="primary"] span{
+  color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;
+}
 .stTextInput input,.stTextArea textarea,[data-baseweb="input"] input{
   background:#fff!important;color:#262730!important;border-color:#d3dae4!important;
 }
 [data-baseweb="select"]>div{background:#fff!important;color:#262730!important;}
-.stButton>button[kind="secondary"]{background:#fff!important;color:#262730!important;border:1px solid #d3dae4!important;}
+.stButton>button[kind="secondary"],
+button[data-testid="stBaseButton-secondary"],
+button[data-testid="stBaseButton-secondaryFormSubmit"]{
+  background:#fff!important;color:#262730!important;border:1px solid #d3dae4!important;
+}
+/* 主要按鈕（含表單送出）：黑字貼藍底的可讀性問題，改成白字 */
+.stButton>button[kind="primary"],
+button[data-testid="stBaseButton-primary"],
+button[data-testid="stBaseButton-primaryFormSubmit"]{
+  background:#2563eb!important;border-color:#2563eb!important;
+}
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"]{
+  background:#2563eb!important;border-color:#2563eb!important;
+  background-image:none!important;
+}
+/* 送出鈕標籤走 Streamlit 內嵌 .stMarkdown，與全域「.stMarkdown p」特異度衝突時會仍是深色字 */
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"] .stMarkdown,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"] .stMarkdown p,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"] .stMarkdown span,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"] .stMarkdown div,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"] .stMarkdown label,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"] [data-testid="stMarkdownContainer"],
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"] [data-testid="stMarkdownContainer"] p,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"] [data-testid="stMarkdownContainer"] span{
+  color:#ffffff!important;
+  -webkit-text-fill-color:#ffffff!important;
+}
+button[kind="primaryFormSubmit"],
+button[kind="primaryFormSubmit"] *,
+button[kind="primaryFormSubmit"] [class*="st-emotion-cache"]{
+  color:#FAFAFA!important;
+  -webkit-text-fill-color:#FAFAFA!important;
+}
+button[kind="primaryFormSubmit"]{
+  background-color:#2563eb!important;
+  background-image:none!important;
+  border-color:#2563eb!important;
+}
+.stButton>button[kind="primary"], .stButton>button[kind="primary"] *,
+button[data-testid="stBaseButton-primary"], button[data-testid="stBaseButton-primary"] *,
+button[data-testid="stBaseButton-primaryFormSubmit"], button[data-testid="stBaseButton-primaryFormSubmit"] *,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"],
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"] *,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"] p,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"] span,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"] div{
+  color:#ffffff!important;
+  -webkit-text-fill-color:#ffffff!important;
+}
+.stButton>button[kind="primary"] svg,
+button[data-testid="stBaseButton-primary"] svg,
+button[data-testid="stBaseButton-primaryFormSubmit"] svg,
+[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"] svg{
+  fill:#ffffff!important;
+  color:#ffffff!important;
+}
 </style>"""
+
+
+def _wc_inject_streamlit_late_css_overrides():
+    """於腳本最後執行，讓樣式盡量晚插入，覆蓋表單 primary 送出鈕內 .stMarkdown 文字色。"""
+    st.markdown(
+        """<style id="wc-late-form-primary-submit-text">
+/* DevTools 常見：button 同時有 kind="primaryFormSubmit" 與 data-testid="stBaseButton-primaryFormSubmit"；
+   內文包在 div.st-emotion-cache-* 內，且會繼承 .block-container 的深色。以下用屬性選擇器硬蓋。 */
+button[kind="primaryFormSubmit"],
+button[kind="primaryFormSubmit"] *,
+button[data-testid="stBaseButton-primaryFormSubmit"],
+button[data-testid="stBaseButton-primaryFormSubmit"] *{
+  color:#FAFAFA!important;
+  -webkit-text-fill-color:#FAFAFA!important;
+}
+button[kind="primaryFormSubmit"] [class*="st-emotion-cache"],
+button[data-testid="stBaseButton-primaryFormSubmit"] [class*="st-emotion-cache"]{
+  color:#FAFAFA!important;
+  -webkit-text-fill-color:#FAFAFA!important;
+}
+button[kind="primaryFormSubmit"] .stMarkdown,
+button[kind="primaryFormSubmit"] .stMarkdown p,
+button[kind="primaryFormSubmit"] .stMarkdown span,
+button[kind="primaryFormSubmit"] .stMarkdown div,
+button[kind="primaryFormSubmit"] [data-testid="stMarkdownContainer"],
+button[kind="primaryFormSubmit"] [data-testid="stMarkdownContainer"] p{
+  color:#FAFAFA!important;
+  -webkit-text-fill-color:#FAFAFA!important;
+}
+button[kind="primaryFormSubmit"],
+button[data-testid="stBaseButton-primaryFormSubmit"]{
+  background-color:#2563eb!important;
+  background-image:none!important;
+  border-color:#2563eb!important;
+}
+[data-testid="stAppViewContainer"] [data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"],
+[data-testid="stAppViewContainer"] [data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"] *{
+  color:#FAFAFA!important;
+  -webkit-text-fill-color:#FAFAFA!important;
+}
+[data-testid="stAppViewContainer"] [data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"] .stMarkdown,
+[data-testid="stAppViewContainer"] [data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"] .stMarkdown p,
+[data-testid="stAppViewContainer"] [data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"] .stMarkdown span,
+[data-testid="stAppViewContainer"] [data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"] .stMarkdown div,
+[data-testid="stAppViewContainer"] [data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"] [data-testid="stMarkdownContainer"],
+[data-testid="stAppViewContainer"] [data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"] [data-testid="stMarkdownContainer"] p{
+  color:#FAFAFA!important;
+  -webkit-text-fill-color:#FAFAFA!important;
+}
+[data-testid="stAppViewContainer"] [data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"]{
+  background:#2563eb!important;
+  background-image:none!important;
+  border-color:#2563eb!important;
+}
+</style>""",
+        unsafe_allow_html=True,
+    )
+
 
 # ==========================================
 # UI介面與進度顯示
@@ -150,7 +374,8 @@ if st.session_state.app_mode==APP_MODE_SCAN:
             "若您要**只掃某一層子目錄**且該層名稱無副檔名，請在網址末端加 /（例如 …/Sale/）。",
         )
         st.checkbox("⚡同時執行載入速度檢測(PageSpeedAPI)",key="run_psi")
-        start_scan=st.form_submit_button("🚀開始掃描",use_container_width=True,type="primary")
+        # type=secondary：白／淺灰底 + 深色字，避免 primary 紅藍底與 Markdown 內層樣式對比不足（不必調 DevTools）
+        start_scan=st.form_submit_button("🚀 開始掃描",use_container_width=True,type="secondary")
     raw_custom=(st.session_state.get("scan_url_field")or"").strip()
     custom_first=raw_custom
     pick=st.session_state.get("fav_pick",_SCAN_FAV_NONE)
@@ -452,3 +677,5 @@ elif st.session_state.app_mode==APP_MODE_EXCLUDE:
         _cfg=load_config();rules=st.text_area("排除規則(每行一個關鍵字)",value=_cfg.get(key,""))
         if st.button("💾儲存規則"):
             _cfg[key]=rules;save_config(_cfg);st.success("規則已儲存！")
+
+_wc_inject_streamlit_late_css_overrides()

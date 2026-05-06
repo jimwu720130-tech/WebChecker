@@ -827,6 +827,44 @@ def _probe_external_url_sync(url:str,referer:str)->bool:
                 pass
     return False
 
+def _probe_cache_get(probe_cache: dict, url: str, *, fail_ttl_s: int = 600) -> Optional[bool]:
+    """外站探測快取讀取。
+
+    目的：避免「暫時性失敗」被永久快取為 False，導致正常連結整批掃描都被誤判失效。
+    - True：永遠視為命中（不再探測）。
+    - False：僅在 fail_ttl_s 秒內視為命中；超過則允許重新探測一次。
+
+    相容舊格式：probe_cache[url] 可能是 bool；新版會寫入 {'ok': bool, 'ts': float}。
+    """
+    if not probe_cache or not url:
+        return None
+    v = probe_cache.get(url)
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        # 舊版：False 可能是暫時性錯誤；不要永遠相信它。
+        return True if v else None
+    if isinstance(v, dict):
+        ok = v.get("ok")
+        if ok is True:
+            return True
+        if ok is False:
+            try:
+                ts = float(v.get("ts") or 0.0)
+            except Exception:
+                ts = 0.0
+            if ts > 0 and (time.time() - ts) < float(fail_ttl_s):
+                return False
+            return None
+    return None
+
+
+def _probe_cache_set(probe_cache: dict, url: str, ok: bool) -> None:
+    if not isinstance(probe_cache, dict) or not url:
+        return
+    probe_cache[url] = {"ok": bool(ok), "ts": float(time.time())}
+
+
 async def probe_external_links_unreachable(
     urls:set,referer:str,probe_cache:dict,probe_sem:Optional[asyncio.Semaphore]=None
 )->Tuple[List[str],List[str]]:
@@ -843,11 +881,14 @@ async def probe_external_links_unreachable(
     failed=[]
 
     async def one(u:str):
-        if u in probe_cache:
-            return u if probe_cache[u] is False else None
+        cached = _probe_cache_get(probe_cache, u, fail_ttl_s=600)
+        if cached is True:
+            return None
+        if cached is False:
+            return u
         async with sem:
             ok=await asyncio.to_thread(_probe_external_url_sync,u,referer)
-        probe_cache[u]=ok
+        _probe_cache_set(probe_cache, u, ok)
         return u if not ok else None
 
     _chunk=128
