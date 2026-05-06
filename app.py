@@ -75,7 +75,7 @@ h1,h2,h3,.stMarkdown p,label,p,.stText{color:#262730!important;}
 # ==========================================
 # UI介面與進度顯示
 # ==========================================
-st.set_page_config(page_title="網站檢核工具",page_icon="🔍",layout="centered")
+st.set_page_config(page_title="網站檢核小幫手",page_icon="🔍",layout="centered")
 if "ui_theme" not in st.session_state:st.session_state.ui_theme="light"
 st.markdown(_streamlit_theme_inject(),unsafe_allow_html=True)
 if "app_mode" not in st.session_state:st.session_state.app_mode=APP_MODE_SCAN
@@ -115,7 +115,7 @@ if st.sidebar.button("🌙 切換為深色"if st.session_state.get("ui_theme")==
 # 頁面1：掃描作業
 # ==========================================
 if st.session_state.app_mode==APP_MODE_SCAN:
-    st.title("🔍網站檢核工具")
+    st.title("🔍網站檢核小幫手")
     if st.session_state.pop("_wc_pending_clear_scan",False):
         st.session_state.visited_urls,st.session_state.to_visit_urls,st.session_state.failure_report=set(),[],{}
         st.session_state.is_scanning,st.session_state.psi_done=False,False

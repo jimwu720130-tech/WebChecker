@@ -3,7 +3,7 @@ from typing import List, Optional, Set, Tuple
 import sys
 
 # 供除錯／版本確認：與 Streamlit 側欄「檢核核心版本」應一致
-SCAN_ENGINE_BUILD = "2026-05-06-p21"
+SCAN_ENGINE_BUILD = "2026-05-06-p24"
 import random
 import requests
 import urllib3
@@ -67,6 +67,19 @@ def ordered_visited_urls_for_export(visited_urls:Set[str],visited_order:Optional
 def _fav_select_rows(favs):
     return[_SCAN_FAV_NONE]+[(x.get("id",""),x.get("name",""),x.get("url","")) for x in favs]
 
+# Excel 實務上過長之 file://／外部 URL 嵌入 hyperlink 仍可能觸發舊版相容警告；過長者保留為可換行之純文字。
+_EXCEL_HYPERLINK_URL_MAX_LEN = 2048
+
+def _excel_cell_url_hyperlink_writable(u:str)->bool:
+    u=(u or"").strip()
+    if not u or u=="—":
+        return False
+    if len(u)>_EXCEL_HYPERLINK_URL_MAX_LEN:
+        return False
+    lo=u.lower()
+    return lo.startswith(("http://","https://"))
+
+
 def visited_urls_to_excel_bytes(
     url_list, external_probed_list=None, link_invalid_urls:Optional[Set[str]]=None,
     external_source_map:Optional[dict]=None,
@@ -81,6 +94,13 @@ def visited_urls_to_excel_bytes(
 
     external_source_map：{外站 URL: [出現該連結之站內頁面 URL, ...]}；用於「來源站內頁面」欄。
     站內列固定填「—」；外站列以換行串接所有來源頁，配合 wrap_text 顯示多行。
+
+    輸出之 xlsx：第一列標題啟用自動篩選；**「有效連結」為「不符合」之列排在清單最上方**（其餘列
+    維持原本站內→外站之相對順序）；序號於排序後重新連續編號。
+
+    「掃描網址」及單筆之「來源站內頁面」若為長度在
+    _EXCEL_HYPERLINK_URL_MAX_LEN 內之 http(s) URL，儲存為藍字底線可點擊超連結；更長者仍為
+    純文字以降低 Excel 開檔相容性問題。
     """
     v=url_list or []
     e=[]if external_probed_list is None else list(external_probed_list)
@@ -97,25 +117,53 @@ def visited_urls_to_excel_bytes(
         # 多列來源以換行串接；空集合（極少見：經其他途徑加入而無紀錄）顯示「—」
         srcs_text="\n".join(srcs)if srcs else"—"
         rows.append({"序號":off+idx+1,"掃描網址":u,"類型":"外站（已連線驗證）","有效連結":lc,"來源站內頁面":srcs_text})
+    # 「不符合」列置頂，其餘維持既有相對順序（stable sort）；序號重新 1..N
+    def _excel_lc_sort_key(r:dict)->tuple:
+        lc=(r.get("有效連結")or"").strip()
+        if lc=="不符合":
+            return(0,)
+        if lc=="符合":
+            return(1,)
+        return(2,)
+    rows=sorted(rows,key=_excel_lc_sort_key)
+    for i,r in enumerate(rows,1):
+        r["序號"]=i
     buf=BytesIO()
     cols=["序號","掃描網址","類型","有效連結","來源站內頁面"]
     df=pd.DataFrame(rows,columns=cols)if rows else pd.DataFrame({c:[]for c in cols})
-    # 關閉 xlsxwriter 之 strings_to_urls 自動轉超連結：
-    # Excel 對單一超連結 URL 有約 255 字元上限，本工具的同網域中文 PDF（含 %xx 編碼）與
-    # 社群分享網址常超過此限，xlsxwriter 仍會嵌入超連結欄位導致開檔被警告「內容有問題」；
-    # 全表保留為純字串可避免該警告（仍可在 Excel 中按右鍵手動加入超連結）。
+    # 關閉 xlsxwriter 之 strings_to_urls 自動轉超連結：改於寫入後對「長度安全」之 URL 明確 write_url，
+    # 避免批量自動轉換時混入超長網址導致 Excel 開檔警告（見 _EXCEL_HYPERLINK_URL_MAX_LEN）。
     engine_kw={"options":{"strings_to_urls":False}}
     with pd.ExcelWriter(buf,engine="xlsxwriter",engine_kwargs=engine_kw) as writer:
         df.to_excel(writer,index=False,sheet_name="掃描清單")
-        # 為「掃描網址」與「來源站內頁面」啟用自動換行；其餘設合理欄寬以利閱讀。
         wb=writer.book;ws=writer.sheets["掃描清單"]
         wrap_fmt=wb.add_format({"text_wrap":True,"valign":"top"})
         plain_fmt=wb.add_format({"valign":"top"})
+        link_wrap_fmt=wb.add_format({"text_wrap":True,"valign":"top","font_color":"blue","underline":True})
+        n=len(df)
         ws.set_column(0,0,6,plain_fmt)         # 序號
         ws.set_column(1,1,72,wrap_fmt)         # 掃描網址
         ws.set_column(2,2,20,plain_fmt)        # 類型
         ws.set_column(3,3,10,plain_fmt)        # 有效連結
         ws.set_column(4,4,72,wrap_fmt)         # 來源站內頁面
+        # 標題列自動篩選
+        if n>=0:
+            last_row=n if n>0 else 0
+            ws.autofilter(0,0,last_row,4)
+        # 可安全嵌入者改為超連結（掃描網址＝第2欄 index 1）
+        for r in range(1,n+1):
+            cell_u=str(df.iloc[r-1].get("掃描網址")or"")
+            if _excel_cell_url_hyperlink_writable(cell_u):
+                try:
+                    ws.write_url(r,1,cell_u,link_wrap_fmt,cell_u)
+                except Exception:
+                    pass
+            src_raw=str(df.iloc[r-1].get("來源站內頁面")or"")
+            if "\n" not in src_raw and _excel_cell_url_hyperlink_writable(src_raw):
+                try:
+                    ws.write_url(r,4,src_raw,link_wrap_fmt,src_raw)
+                except Exception:
+                    pass
     buf.seek(0)
     return buf.getvalue()
 
@@ -447,13 +495,13 @@ def extract_same_domain_links(html:str,page_url:str,target_domain:str,file_exts=
                 _add_if_same_domain(val)
     return extracted
 
-# 外站連結：每一筆皆做 HEAD/GET 連線驗證
-# requests timeout=(連線秒, 讀取秒)，避免 DNS/握手卡住
-# 從 (4, 10) 略放寬至 (8, 20)：高併發下對 Facebook、Google Maps 等大型站台的初次連線
-# 與 TLS 握手 4 秒過短，少數機器網路抖動會被誤判成「不可達」。
-_PROBE_REQ_TIMEOUT=(8, 20)
-# 同一批 Playwright 並行頁面**共用**此外站探測併發，避免 4×12=48 同時連線拖死或假死
-_BATCH_EXTERNAL_PROBE_CONCURRENCY=16
+# 政府／大型站台在**高併發 HEAD/GET** 下易短暫逾時或重連；過短的連線逾時 + 單次探測會誤判為不可達。
+# 略放寬逾時，並在 `_probe_external_url_sync` 內對失敗結果做少量退避重試（見 `_EXTERNAL_PROBE_ATTEMPTS`）。
+_PROBE_REQ_TIMEOUT=(12, 30)
+# 同一批 Playwright 並行頁面**共用**此外站探測併發；過高易觸發對端限速／中斷，反增假陰性
+_BATCH_EXTERNAL_PROBE_CONCURRENCY=8
+# 外站探測：同一 URL 組（含 http→https、尾端 / 變體）全滅後再重試之回合數（間隔遞增 sleep）
+_EXTERNAL_PROBE_ATTEMPTS=3
 # 單頁含「開頁＋擷取連結＋**全部**外站實測」總上限（外站多時必須夠長）
 _PAGE_SCAN_TIMEOUT_S=900
 _urllib3_insecure_warn_disabled=False
@@ -735,6 +783,9 @@ def _probe_external_url_sync(url:str,referer:str)->bool:
     （例如 epamail.moenv.gov.tw）。
 
     **尾端 /**：若 href 為 `…/page/ID/`，先試原網址再試去掉尾端 `/`（與 moenv 等站台行為一致）。
+
+    對**同一組**候選網址若皆失敗，會以短暫遞增間隔最多重試 `_EXTERNAL_PROBE_ATTEMPTS` 次，以降低
+    高併發下對方節流／瞬斷／TLS 握手逾時造成之假陰性（如 moenv 各子域同批驗證）。
     """
     global _urllib3_insecure_warn_disabled
     if not _urllib3_insecure_warn_disabled:
@@ -757,17 +808,23 @@ def _probe_external_url_sync(url:str,referer:str)->bool:
                     candidates=[https_u,raw]
         except Exception:
             pass
-    seen=set()
-    for u in candidates:
-        u=(u or"").strip()
-        if not u:
-            continue
-        for v in _probe_url_variants_trailing_slash(u):
-            if not v or v in seen:
+    for attempt in range(max(1,_EXTERNAL_PROBE_ATTEMPTS)):
+        seen=set()
+        for u in candidates:
+            u=(u or"").strip()
+            if not u:
                 continue
-            seen.add(v)
-            if _try_probe_single_url(v,headers):
-                return True
+            for v in _probe_url_variants_trailing_slash(u):
+                if not v or v in seen:
+                    continue
+                seen.add(v)
+                if _try_probe_single_url(v,headers):
+                    return True
+        if attempt+1<max(1,_EXTERNAL_PROBE_ATTEMPTS):
+            try:
+                time.sleep(0.7*(attempt+1))
+            except Exception:
+                pass
     return False
 
 async def probe_external_links_unreachable(

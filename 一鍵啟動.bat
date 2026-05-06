@@ -17,7 +17,7 @@ if %errorlevel% equ 0 (
 )
 
 echo.
-echo 正在啟動「網站檢核工具」Streamlit 版…
+echo 正在啟動「網站檢核小幫手」Streamlit 版…
 echo 關閉黑色視窗即停止服務。
 echo.
 
