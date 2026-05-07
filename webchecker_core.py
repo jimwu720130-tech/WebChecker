@@ -1,9 +1,10 @@
 import asyncio
 from typing import List, Optional, Set, Tuple
 import sys
+import logging
 
 # 供除錯／版本確認：與 Streamlit 側欄「檢核核心版本」應一致
-SCAN_ENGINE_BUILD = "2026-05-07-p29"
+SCAN_ENGINE_BUILD = "2026-05-07-p30"
 import random
 import requests
 import urllib3
@@ -2595,6 +2596,9 @@ async def check_single_page(
     except Exception as e:
         if page_exceptions is not None:
             page_exceptions.append(f"{url}: {type(e).__name__}: {e}")
+        logging.getLogger(__name__).warning(
+            "check_single_page failed url=%s: %s: %s", url, type(e).__name__, e, exc_info=True
+        )
     finally:await page.close()
     # 若 except 路徑進來、ext_http_sources 仍未定義，提供安全預設讓上層解包不會 NameError
     try:

@@ -1,5 +1,6 @@
 import streamlit as st
 import asyncio
+import concurrent.futures
 import random
 import html as html_stdlib
 import uuid
@@ -113,6 +114,19 @@ from webchecker_core import (
     _probe_cache_get,
     get_pagespeed_score, _run_scan_parallel_batch,
 )
+
+
+def _run_scan_parallel_batch_in_worker_thread(*args, **kwargs):
+    """在獨立執行緒內 ``asyncio.run`` Playwright 掃描，避免 Streamlit Cloud／Uvicorn 所在執行緒已有 event loop
+    時 ``asyncio.run`` 與 Playwright 衝突，導致每輪立刻結束或結果異常。"""
+    async def _main():
+        return await _run_scan_parallel_batch(*args, **kwargs)
+
+    def _work():
+        return asyncio.run(_main())
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(_work).result()
 
 
 # 與 webchecker_core 同樣的策略：頂層容錯 import，避免 Streamlit hot-reload
@@ -556,9 +570,14 @@ if st.session_state.app_mode==APP_MODE_SCAN:
         _cap=max(1,int(st.session_state._wc_scan_host_concurrency))
         batch=[]
         while len(batch)<_cap and st.session_state.to_visit_urls and st.session_state.is_scanning:
-            cand=st.session_state.to_visit_urls.pop(0)
-            if cand in st.session_state.visited_urls:continue
-            if not url_in_scan_scope(cand,_scope):continue
+            cand=st.session_state.to_visit_urls[0]
+            if cand in st.session_state.visited_urls:
+                st.session_state.to_visit_urls.pop(0)
+                continue
+            if not url_in_scan_scope(cand,_scope):
+                st.session_state.to_visit_urls.pop(0)
+                continue
+            st.session_state.to_visit_urls.pop(0)
             batch.append(cand)
         if not batch:
             st.session_state.is_scanning=False
@@ -578,12 +597,12 @@ if st.session_state.app_mode==APP_MODE_SCAN:
             _ref=(st.session_state.visited_order[-1]if st.session_state.visited_order else _site_root_url(url_norm))
             with st.spinner("⏳ Playwright 掃描中（含分頁與檔案按鈕時可能需數分鐘，畫面會暫停更新屬正常）…"):
                 try:
-                    results=asyncio.run(_run_scan_parallel_batch(
+                    results=_run_scan_parallel_batch_in_worker_thread(
                         batch,url_norm,_sc,_ref,
                         host_concurrency=st.session_state.get("_wc_scan_host_concurrency") or 4,
                         external_probe_cache=st.session_state.setdefault("_wc_external_url_probe_cache", {}),
                         page_exceptions=st.session_state.setdefault("_scan_page_exceptions", []),
-                    ))
+                    )
                 except Exception as e:
                     st.session_state.is_scanning=False
                     st.error(f"掃描發生錯誤：{e}")
