@@ -4,6 +4,7 @@ import concurrent.futures
 import random
 import html as html_stdlib
 import uuid
+import json
 import os
 import sys
 import subprocess
@@ -76,41 +77,13 @@ def _ensure_playwright_chromium() -> None:
 _ensure_playwright_chromium()
 
 
-def _inject_github_gist_credentials_from_secrets() -> None:
-    """將 Streamlit Secrets 中之 GitHub Gist 憑證注入環境變數，使 cloud_persistence 可用。
-
-    secrets.toml 預期格式：
-
-        [github]
-        gist_token = "ghp_xxx"           # 需具 gist scope
-        gist_id    = "abc123def4567890"  # 預先建立之 secret gist 的 ID
-
-    未設定者本函式為 no-op；常用網站／排除規則仍可在本機執行（僅 Streamlit Cloud 重啟後不持久）。
-    """
-    try:
-        gh = st.secrets.get("github") if hasattr(st, "secrets") else None
-    except Exception:
-        gh = None
-    if not isinstance(gh, dict) and not hasattr(gh, "get"):
-        return
-    tok = (gh.get("gist_token") if gh else None) or ""
-    gid = (gh.get("gist_id") if gh else None) or ""
-    if tok and not os.environ.get("WC_GIST_TOKEN"):
-        os.environ["WC_GIST_TOKEN"] = str(tok).strip()
-    if gid and not os.environ.get("WC_GIST_ID"):
-        os.environ["WC_GIST_ID"] = str(gid).strip()
-
-
-_inject_github_gist_credentials_from_secrets()
-
-
 from webchecker_core import (
     APP_MODE_SCAN, APP_MODE_FAV, APP_MODE_EXCLUDE, APP_MODE_INDICATOR_HELP,
     SCAN_ENGINE_BUILD,
     _SCAN_FAV_NONE, _format_fav_select_row, _fav_select_rows,
     ordered_visited_urls_for_export, visited_urls_to_excel_bytes,
     load_favorites, save_favorites, load_config, save_config,
-    normalize_url_input, normalize_external_probe_url, get_clean_domain, url_in_scan_scope, _site_root_url,
+    normalize_url_input, normalize_favorites_upload, normalize_external_probe_url, get_clean_domain, url_in_scan_scope, _site_root_url,
     _probe_cache_get,
     get_pagespeed_score, _run_scan_parallel_batch,
 )
@@ -128,33 +101,6 @@ def _run_scan_parallel_batch_in_worker_thread(*args, **kwargs):
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
         return pool.submit(_work).result()
 
-
-# 與 webchecker_core 同樣的策略：頂層容錯 import，避免 Streamlit hot-reload
-# 把動態 import 撞成 sys.modules 不一致狀態，引發 KeyError。
-try:
-    import cloud_persistence as _cloud_persistence  # type: ignore[import-not-found]
-except Exception:
-    _cloud_persistence = None  # type: ignore[assignment]
-
-
-@st.cache_resource(show_spinner=False)
-def _bootstrap_cloud_data():
-    """於容器啟動時（每個 Streamlit 進程僅執行一次）將 Gist 上之最新內容拉到本機檔案，
-    使後續 ``load_favorites`` / ``load_config`` 直接讀本機即可，避免每次 rerun 打 GitHub API。"""
-    if _cloud_persistence is None:
-        return True
-    try:
-        if _cloud_persistence.is_enabled():
-            _cloud_persistence.pull_to_local_files({
-                "favorites.json": "favorites.json",
-                "config.json": "config.json",
-            })
-    except Exception:
-        pass
-    return True
-
-
-_bootstrap_cloud_data()
 
 def _ordered_visited_urls_for_export():
     return ordered_visited_urls_for_export(
@@ -836,6 +782,34 @@ elif st.session_state.app_mode==APP_MODE_INDICATOR_HELP:
 # ==========================================
 elif st.session_state.app_mode==APP_MODE_FAV:
     st.title("⭐常用網站設定")
+    st.caption(
+        "清單儲存於專案目錄的 `favorites.json`。**Streamlit Cloud** 重啟後會恢復成 Git 上的檔案；"
+        "若要不改程式碼常駐清單，請在 GitHub 直接編輯／提交 `favorites.json`，或在此頁上傳覆寫。"
+    )
+    up=st.file_uploader(
+        "從檔案載入常用網站（favorites.json）",
+        type=["json"],
+        help="JSON 陣列，每筆為 {\"name\":\"名稱\",\"url\":\"https://…\"}；可選 id。上傳後會覆寫目前清單。",
+        key="wc_favorites_json_upload",
+    )
+    if up is not None:
+        try:
+            raw=json.loads(up.getvalue().decode("utf-8"))
+            merged=normalize_favorites_upload(raw)
+            save_favorites(merged)
+            st.success(f"已從檔案載入 **{len(merged)}** 筆常用網站。")
+            st.rerun()
+        except Exception as ex:
+            st.error(f"無法解析 favorites.json：{ex}")
+    _fav_json_payload=json.dumps(load_favorites(),ensure_ascii=False,indent=4)
+    st.download_button(
+        "📥 下載目前 favorites.json",
+        data=_fav_json_payload.encode("utf-8"),
+        file_name="favorites.json",
+        mime="application/json",
+        key="wc_download_favorites_json",
+    )
+    st.markdown("---")
     with st.form("add_fav",clear_on_submit=True):
         st.subheader("➕新增網站")
         n=st.text_input("網站名稱",key="add_fav_name")

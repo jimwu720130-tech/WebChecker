@@ -186,30 +186,29 @@ def load_favorites():
         except:pass
     return []
 
-# 在模組頂層做容錯 import：避免「函式內動態 import」在 Streamlit hot-reload
-# 期間造成 sys.modules 半新半舊狀態，引發 `KeyError: 'webchecker_core'`。
-try:
-    import cloud_persistence as _cloud_persistence  # type: ignore[import-not-found]
-except Exception:
-    _cloud_persistence = None  # type: ignore[assignment]
-
-
-def _try_cloud_save(filename:str,payload:str)->None:
-    """最佳努力同步至 GitHub Gist（若已設定憑證）；失敗僅 stderr，不拋例外，避免凍結 UI。"""
-    if _cloud_persistence is None:
-        return
-    try:
-        _cloud_persistence.save(filename, payload)
-    except Exception:
-        # 任何例外靜默：本機檔已寫入，雲端同步只是錦上添花
-        pass
-
+def normalize_favorites_upload(data)->list:
+    """將上傳之 JSON 正規化為 favorites 清單。不符格式則 raise ValueError。"""
+    if not isinstance(data,list):
+        raise ValueError("檔案頂層必須為 JSON 陣列 []")
+    out=[]
+    for i,row in enumerate(data):
+        if not isinstance(row,dict):
+            raise ValueError(f"第 {i+1} 筆必須為物件 {{}}")
+        name=(str(row.get("name")or"")).strip()
+        url_raw=(str(row.get("url")or"")).strip()
+        url_first=(url_raw.splitlines()[0]if url_raw else"").strip()
+        if not name or not url_first:
+            raise ValueError(f"第 {i+1} 筆須含非空的 name 與 url")
+        uid=str(row.get("id")or"").strip()
+        if not uid:
+            uid=str(uuid.uuid4())
+        out.append({"id":uid,"name":name,"url":normalize_url_input(url_first)})
+    return out
 
 def save_favorites(items):
     payload=json.dumps(items,ensure_ascii=False,indent=4)
     with open(FAVORITES_FILE,"w",encoding="utf-8") as f:
         f.write(payload)
-    _try_cloud_save(FAVORITES_FILE,payload)
 
 def load_config():
     if os.path.exists(CONFIG_FILE):
@@ -223,7 +222,6 @@ def save_config(config_data):
     payload=json.dumps(config_data,ensure_ascii=False,indent=4)
     with open(CONFIG_FILE,"w",encoding="utf-8") as f:
         f.write(payload)
-    _try_cloud_save(CONFIG_FILE,payload)
 
 def normalize_url_input(url:str)->str:
     u=(url or "").strip()

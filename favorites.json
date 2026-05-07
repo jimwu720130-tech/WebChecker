@@ -2,26 +2,26 @@
     {
         "id": "f73666a1-b274-49dd-9fa7-f1d5135a8049",
         "name": "資源回收管理資訊系統",
-        "url": "https://rrms.eri.com.tw"
+        "url": "https://recycle2.moenv.gov.tw"
     },
     {
         "id": "28be3e82-1104-49ad-9b2a-a09912f00921",
         "name": "資源回收網",
-        "url": "https://recycle.eri.com.tw"
+        "url": "https://recycle.moenv.gov.tw"
     },
     {
         "id": "a9fc617a-1af2-4693-a2f5-0aa0f6ebfc66",
         "name": "營業量申報系統",
-        "url": "https://recycle1.moenv.gov.tw"
+        "url": "https://recycle1.moenv.gov.tw/sys/business"
     },
     {
         "id": "839269a7-8b1a-44ac-899a-7155d28fdbf3",
         "name": "廢四機回收入口網",
-        "url": "https://rrms.eri.com.tw/DNC/Sale/Login"
+        "url": "https://recycle2.moenv.gov.tw/DNC/Sale"
     },
     {
         "id": "4e2c8350-21dc-4830-a19c-6b0acb7fdf10",
         "name": "全國維修地圖",
-        "url": "https://recycle.eri.com.tw/utmap"
+        "url": "https://recycle.moenv.gov.tw/utmap"
     }
 ]
