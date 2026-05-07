@@ -9,3 +9,6 @@ __pycache__/
 
 # 可攜式套件建置輸出
 dist/
+
+# Streamlit secrets：實際憑證不入版控（樣本 .streamlit/secrets.toml.example 仍會被追蹤）
+.streamlit/secrets.toml

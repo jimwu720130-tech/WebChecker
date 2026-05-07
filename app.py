@@ -75,6 +75,34 @@ def _ensure_playwright_chromium() -> None:
 _ensure_playwright_chromium()
 
 
+def _inject_github_gist_credentials_from_secrets() -> None:
+    """將 Streamlit Secrets 中之 GitHub Gist 憑證注入環境變數，使 cloud_persistence 可用。
+
+    secrets.toml 預期格式：
+
+        [github]
+        gist_token = "ghp_xxx"           # 需具 gist scope
+        gist_id    = "abc123def4567890"  # 預先建立之 secret gist 的 ID
+
+    未設定者本函式為 no-op；常用網站／排除規則仍可在本機執行（僅 Streamlit Cloud 重啟後不持久）。
+    """
+    try:
+        gh = st.secrets.get("github") if hasattr(st, "secrets") else None
+    except Exception:
+        gh = None
+    if not isinstance(gh, dict) and not hasattr(gh, "get"):
+        return
+    tok = (gh.get("gist_token") if gh else None) or ""
+    gid = (gh.get("gist_id") if gh else None) or ""
+    if tok and not os.environ.get("WC_GIST_TOKEN"):
+        os.environ["WC_GIST_TOKEN"] = str(tok).strip()
+    if gid and not os.environ.get("WC_GIST_ID"):
+        os.environ["WC_GIST_ID"] = str(gid).strip()
+
+
+_inject_github_gist_credentials_from_secrets()
+
+
 from webchecker_core import (
     APP_MODE_SCAN, APP_MODE_FAV, APP_MODE_EXCLUDE, APP_MODE_INDICATOR_HELP,
     SCAN_ENGINE_BUILD,
@@ -85,6 +113,25 @@ from webchecker_core import (
     _probe_cache_get,
     get_pagespeed_score, _run_scan_parallel_batch,
 )
+
+
+@st.cache_resource(show_spinner=False)
+def _bootstrap_cloud_data():
+    """於容器啟動時（每個 Streamlit 進程僅執行一次）將 Gist 上之最新內容拉到本機檔案，
+    使後續 ``load_favorites`` / ``load_config`` 直接讀本機即可，避免每次 rerun 打 GitHub API。"""
+    try:
+        import cloud_persistence
+        if cloud_persistence.is_enabled():
+            cloud_persistence.pull_to_local_files({
+                "favorites.json": "favorites.json",
+                "config.json": "config.json",
+            })
+    except Exception:
+        pass
+    return True
+
+
+_bootstrap_cloud_data()
 
 def _ordered_visited_urls_for_export():
     return ordered_visited_urls_for_export(

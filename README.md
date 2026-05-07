@@ -133,20 +133,67 @@ streamlit run app.py
 
 ---
 
+## 部署到 Streamlit Cloud：常用網站／排除規則持久化
+
+Streamlit Community Cloud 容器之檔案系統屬**暫時性**，每次重啟會回到 git clone 狀態，
+直接寫 `favorites.json` / `config.json` 會在重啟後遺失。本專案內建以 **GitHub Gist** 作為
+雲端持久層，所有使用者共享同一份清單，重啟亦不會遺失。
+
+### 一次性設定（約 5 分鐘）
+
+1. **建立 Secret Gist**（資料儲存位）
+   - 到 [gist.github.com](https://gist.github.com/) 用部署用 GitHub 帳號登入。
+   - 建立一個 **Secret gist**，內含兩個檔案：
+     - `favorites.json` 內容填 `[]`
+     - `config.json` 內容填 `{}`
+   - 建立後從網址列複製 **gist id**（網址尾段 32 位十六進位字串）。
+
+2. **建立 Fine-grained Personal Access Token**
+   - [github.com/settings/tokens?type=beta](https://github.com/settings/tokens?type=beta) → **Generate new token**
+   - **Repository access：** 選 *No access*（不需 repo 權限）。
+   - **Account permissions：** 將 **Gists** 設為 **Read and write**。
+   - 設定到期日後產生，立刻複製 token 字串（離開頁面後就看不到）。
+
+3. **填入 Streamlit Cloud Secrets**
+   - 到 [share.streamlit.io](https://share.streamlit.io/) → 該 app → 右側 ⋯ → **Settings → Secrets**。
+   - 貼上以下內容並把 token / gist id 換成步驟 1、2 取得的值，按 **Save**：
+
+     ```toml
+     [github]
+     gist_token = "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+     gist_id    = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+     ```
+
+   - 回到 app 介面點 **Reboot app**。
+
+4. （可選）**本機測試同步行為**
+   - 將 `.streamlit/secrets.toml.example` 複製成 `.streamlit/secrets.toml`（**已被 `.gitignore` 排除**），填入相同憑證後本機執行 Streamlit 即可同步測試。
+
+### 行為說明
+
+- 容器啟動時：自動把 Gist 上之 `favorites.json` / `config.json` 拉下來覆寫本機檔。
+- UI 新增／編輯／刪除：寫本機檔之外**最佳努力**（best-effort）以 `PATCH` 同步至 Gist；同步失敗只會在 Manage app log 留訊息（`[cloud_persistence] save '...' failed: ...`），不會影響本機操作。
+- 未設定 Secrets：Cloud Sync 自動關閉、回到「僅本機檔」行為，與本機執行一致。
+
+---
+
 ## 檔案目錄說明
 
 ```
 WebChecker/
 ├── app.py                 # Streamlit 主程式：側欄、四種模式頁面、掃描狀態與報表 UI
 ├── webchecker_core.py     # 檢核引擎：URL／範圍、Playwright 掃描批次、指標判斷、PageSpeed、Excel 輸出等
-├── requirements.txt       # pip 相依套件（不含 playwright，需另 pip install playwright）
+├── cloud_persistence.py   # GitHub Gist 持久層（Streamlit Cloud 重啟後仍保留設定）
+├── requirements.txt       # pip 相依套件（已包含 playwright；本機仍需 playwright install chromium）
+├── packages.txt           # Streamlit Cloud apt 系統相依（Chromium 必要 lib）
 ├── README.md              # 本說明檔
 ├── 一鍵啟動.bat           # Windows 快速啟動 Streamlit（可選）
 ├── scripts/               # 可攜式套件建置腳本（Windows）
 │   ├── build_portable_windows.ps1
 │   └── 製作可攜式套件.bat
 ├── .streamlit/
-│   └── config.toml        # Streamlit 客戶端設定（例如極簡工具列）
+│   ├── config.toml             # Streamlit 客戶端設定（例如極簡工具列）
+│   └── secrets.toml.example    # Cloud 持久化之 Gist 憑證樣本（請複製為 secrets.toml 後填入）
 ├── config.json            # （選用）排除規則，執行後可能由程式建立
 ├── favorites.json         # （選用）常用網站清單，執行後可能由程式建立
 └── .gitignore             # Git 忽略規則

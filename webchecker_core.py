@@ -185,9 +185,21 @@ def load_favorites():
         except:pass
     return []
 
+def _try_cloud_save(filename:str,payload:str)->None:
+    """最佳努力同步至 GitHub Gist（若已設定憑證）；失敗僅 stderr，不拋例外，避免凍結 UI。"""
+    try:
+        import cloud_persistence
+        cloud_persistence.save(filename, payload)
+    except Exception:
+        # 模組缺漏或其他例外時靜默：本機檔已寫入，雲端同步只是錦上添花
+        pass
+
+
 def save_favorites(items):
+    payload=json.dumps(items,ensure_ascii=False,indent=4)
     with open(FAVORITES_FILE,"w",encoding="utf-8") as f:
-        json.dump(items,f,ensure_ascii=False,indent=4)
+        f.write(payload)
+    _try_cloud_save(FAVORITES_FILE,payload)
 
 def load_config():
     if os.path.exists(CONFIG_FILE):
@@ -198,8 +210,10 @@ def load_config():
     return {}
 
 def save_config(config_data):
+    payload=json.dumps(config_data,ensure_ascii=False,indent=4)
     with open(CONFIG_FILE,"w",encoding="utf-8") as f:
-        json.dump(config_data,f,ensure_ascii=False,indent=4)
+        f.write(payload)
+    _try_cloud_save(CONFIG_FILE,payload)
 
 def normalize_url_input(url:str)->str:
     u=(url or "").strip()
