@@ -3,6 +3,7 @@ import asyncio
 import random
 import html as html_stdlib
 import uuid
+import os
 from datetime import datetime
 from webchecker_core import (
     APP_MODE_SCAN, APP_MODE_FAV, APP_MODE_EXCLUDE, APP_MODE_INDICATOR_HELP,
@@ -14,6 +15,12 @@ from webchecker_core import (
     _probe_cache_get,
     get_pagespeed_score, _run_scan_parallel_batch,
 )
+
+# 確保雲端環境自動安裝 Playwright 所需的 Chromium 瀏覽器（每個執行個體只做一次）
+_PW_INSTALL_FLAG = "WC_PLAYWRIGHT_CHROMIUM_INSTALLED"
+if os.environ.get("STREAMLIT_RUNTIME_ENV") and not os.environ.get(_PW_INSTALL_FLAG):
+    os.environ[_PW_INSTALL_FLAG] = "1"
+    os.system("playwright install chromium")
 
 def _ordered_visited_urls_for_export():
     return ordered_visited_urls_for_export(
