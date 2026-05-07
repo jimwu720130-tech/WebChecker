@@ -11,6 +11,7 @@ from webchecker_core import (
     ordered_visited_urls_for_export, visited_urls_to_excel_bytes,
     load_favorites, save_favorites, load_config, save_config,
     normalize_url_input, normalize_external_probe_url, get_clean_domain, url_in_scan_scope, _site_root_url,
+    _probe_cache_get,
     get_pagespeed_score, _run_scan_parallel_batch,
 )
 
@@ -494,6 +495,12 @@ if st.session_state.app_mode==APP_MODE_SCAN:
                     nu=normalize_external_probe_url(u)or u
                     if nu not in fr5:
                         fr5.append(nu)
+                _pc=st.session_state.get("_wc_external_url_probe_cache")or{}
+                # 同一掃描中：先掃到的頁面若外連探測失敗會寫入清單，後續頁面成功驗證並寫入快取後應剔除，避免「先錯後對」仍顯示不符合
+                fr5[:]=[
+                    x for x in fr5
+                    if _probe_cache_get(_pc, normalize_external_probe_url(x)or x)is not True
+                ]
                 for l in links:
                     if not url_in_scan_scope(l,_sc):continue
                     if l not in st.session_state.visited_urls:

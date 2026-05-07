@@ -3,7 +3,7 @@ from typing import List, Optional, Set, Tuple
 import sys
 
 # 供除錯／版本確認：與 Streamlit 側欄「檢核核心版本」應一致
-SCAN_ENGINE_BUILD = "2026-05-07-p28"
+SCAN_ENGINE_BUILD = "2026-05-07-p29"
 import random
 import requests
 import urllib3
@@ -540,6 +540,8 @@ _PROBE_REQ_TIMEOUT=(18, 40)
 _BATCH_EXTERNAL_PROBE_CONCURRENCY=5
 # 外站探測：同一 URL 組（含 http→https、尾端 / 變體）全滅後再重試之回合數（間隔遞增 sleep）
 _EXTERNAL_PROBE_ATTEMPTS=3
+# Facebook／Instagram 等：回應內容與節流高度不穩定，略增重試以降低同次／跨次掃描假陰性
+_EXTERNAL_PROBE_ATTEMPTS_SOCIAL=6
 # 單頁含「開頁＋擷取連結＋**全部**外站實測」總上限（外站多時必須夠長）
 _PAGE_SCAN_TIMEOUT_S=900
 # Playwright `APIRequestContext.get` 逾時（毫秒）：與 Chromium 同 TLS／HTTP 堆疊，較能貼近使用者點擊行為
@@ -683,10 +685,40 @@ def _looks_like_shortener_soft_404(host:str,body_text:str,probe_url:str="")->boo
 _JS_REDIRECT_HINTS=("window.location","location.replace","location.assign","location.href")
 
 
-def _looks_like_js_redirect_parking(body_text:str)->bool:
+def _host_is_meta_social_probe_flaky(host:str)->bool:
+    """Facebook／IG 等：常回短 redirect 壳層、Error 壳層或間歇性阻擋；不適用一般「JS 停車頁」規則且需較多重試。"""
+    if not host:
+        return False
+    h=host.lower().lstrip(".")
+    if h.startswith("www."):h=h[4:]
+    roots=(
+        "facebook.com","fb.com","fb.me","m.facebook.com","l.facebook.com","lm.facebook.com",
+        "instagram.com","m.instagram.com",
+        "threads.net","threads.com",
+    )
+    if h in roots:
+        return True
+    return any(h.endswith("."+r)for r in roots)
+
+
+def _looks_like_js_redirect_parking(body_text:str,probe_url:str="")->bool:
     if not body_text:
         return False
     snippet=body_text[:2048]
+    try:
+        ph=(urlparse(probe_url).netloc or"").lower().lstrip(".")
+        if ph.startswith("www."):ph=ph[4:]
+    except Exception:
+        ph=""
+    low_head=snippet.lower()
+    # Meta 常見：document 帶 id=\"facebook\"、或標題 Redirecting／Error；與惡意停車頁不同
+    if _host_is_meta_social_probe_flaky(ph):
+        if 'id="facebook"' in low_head or "id='facebook'" in low_head:
+            return False
+        if "<title>redirecting" in low_head or "<title>error</title>" in low_head:
+            return False
+        if "connect.facebook.net" in low_head or "facebook.com/tr?id=" in low_head:
+            return False
     if len(snippet)>1500:
         return False
     low=snippet.lower()
@@ -791,7 +823,7 @@ def _try_probe_single_url(url:str,headers:dict)->bool:
         if body:
             if is_shortener and _looks_like_shortener_soft_404(host,body,url):
                 return False
-            if _looks_like_js_redirect_parking(body):
+            if _looks_like_js_redirect_parking(body,url):
                 return False
         return True
 
@@ -832,7 +864,7 @@ async def _try_probe_single_url_playwright(api:APIRequestContext,url:str,headers
     if body:
         if is_shortener and _looks_like_shortener_soft_404(host,body,url):
             return False
-        if _looks_like_js_redirect_parking(body):
+        if _looks_like_js_redirect_parking(body,url):
             return False
     return True
 
@@ -859,7 +891,13 @@ async def _probe_external_url_async(raw:str,referer:str,api_request:Optional[API
                     candidates=[https_u,raw_stripped]
         except Exception:
             pass
-    for attempt in range(max(1,_EXTERNAL_PROBE_ATTEMPTS)):
+    try:
+        probe_host=(urlparse(raw_stripped).netloc or"").lower().lstrip(".")
+        if probe_host.startswith("www."):probe_host=probe_host[4:]
+    except Exception:
+        probe_host=""
+    _attempts=_EXTERNAL_PROBE_ATTEMPTS_SOCIAL if _host_is_meta_social_probe_flaky(probe_host)else _EXTERNAL_PROBE_ATTEMPTS
+    for attempt in range(max(1,_attempts)):
         seen=set()
         for u in candidates:
             u=(u or"").strip()
@@ -875,9 +913,9 @@ async def _probe_external_url_async(raw:str,referer:str,api_request:Optional[API
                         return True
                 if _try_probe_single_url(v,headers):
                     return True
-        if attempt+1<max(1,_EXTERNAL_PROBE_ATTEMPTS):
+        if attempt+1<max(1,_attempts):
             try:
-                await asyncio.sleep(0.7*(attempt+1))
+                await asyncio.sleep(0.9*(attempt+1))
             except Exception:
                 pass
     return False
@@ -915,7 +953,13 @@ def _probe_external_url_sync(url:str,referer:str)->bool:
                     candidates=[https_u,raw]
         except Exception:
             pass
-    for attempt in range(max(1,_EXTERNAL_PROBE_ATTEMPTS)):
+    try:
+        sh=(urlparse(raw).netloc or"").lower().lstrip(".")
+        if sh.startswith("www."):sh=sh[4:]
+    except Exception:
+        sh=""
+    _att=_EXTERNAL_PROBE_ATTEMPTS_SOCIAL if _host_is_meta_social_probe_flaky(sh)else _EXTERNAL_PROBE_ATTEMPTS
+    for attempt in range(max(1,_att)):
         seen=set()
         for u in candidates:
             u=(u or"").strip()
@@ -927,9 +971,9 @@ def _probe_external_url_sync(url:str,referer:str)->bool:
                 seen.add(v)
                 if _try_probe_single_url(v,headers):
                     return True
-        if attempt+1<max(1,_EXTERNAL_PROBE_ATTEMPTS):
+        if attempt+1<max(1,_att):
             try:
-                time.sleep(0.7*(attempt+1))
+                time.sleep(0.9*(attempt+1))
             except Exception:
                 pass
     return False
