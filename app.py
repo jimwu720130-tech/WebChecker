@@ -4,7 +4,77 @@ import random
 import html as html_stdlib
 import uuid
 import os
+import sys
+import subprocess
+from pathlib import Path
 from datetime import datetime
+
+
+# Streamlit Cloud（Linux 容器）首次啟動會缺少 Chromium 二進位；本機 Windows 已預裝過則跳過。
+# 必須在 import webchecker_core（其在模組層 import playwright）之前/之後皆可，
+# 因為 import playwright 本身不需要瀏覽器二進位，但於實際 launch 前一定要安裝完成。
+_PW_INSTALL_FLAG = "WC_PLAYWRIGHT_CHROMIUM_INSTALLED"
+
+
+def _chromium_already_installed() -> bool:
+    """檢查 Playwright 的 Chromium 是否已存在於使用者快取目錄，避免重覆下載。"""
+    candidates = []
+    env_dir = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+    if env_dir:
+        candidates.append(Path(env_dir))
+    candidates.append(Path.home() / ".cache" / "ms-playwright")
+    local_app = os.environ.get("LOCALAPPDATA")
+    if local_app:
+        candidates.append(Path(local_app) / "ms-playwright")
+    for d in candidates:
+        try:
+            if d.exists() and any(d.glob("chromium-*")):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _ensure_playwright_chromium() -> None:
+    """在 Streamlit Cloud 等 Linux 容器環境首次啟動時自動安裝 Chromium。
+
+    觸發條件（任一即觸發）：
+      1. 偵測到 Streamlit Cloud 慣用路徑 `/mount/src`。
+      2. 環境變數 `WC_FORCE_PW_INSTALL=1`（手動強制）。
+      3. 在 Linux 上且找不到 ms-playwright 快取。
+    本機 Windows 已預裝瀏覽器者：`_chromium_already_installed()` 會回 True 而提早 return。
+    """
+    if os.environ.get(_PW_INSTALL_FLAG) == "1":
+        return
+    is_streamlit_cloud = Path("/mount/src").exists()
+    force_install = os.environ.get("WC_FORCE_PW_INSTALL") == "1"
+    is_linux_no_cache = sys.platform.startswith("linux") and not _chromium_already_installed()
+    if not (is_streamlit_cloud or force_install or is_linux_no_cache):
+        os.environ[_PW_INSTALL_FLAG] = "1"
+        return
+    if _chromium_already_installed():
+        os.environ[_PW_INSTALL_FLAG] = "1"
+        return
+    try:
+        # 用 sys.executable 而非 PATH 上的 playwright，避免找不到指令；雲端容器無 sudo 權限故不加 --with-deps
+        result = subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "chromium"],
+            capture_output=True, text=True, timeout=300,
+        )
+        if result.returncode != 0:
+            sys.stderr.write(
+                "[WebChecker] playwright install chromium 失敗：\n"
+                f"stdout={result.stdout}\nstderr={result.stderr}\n"
+            )
+        else:
+            os.environ[_PW_INSTALL_FLAG] = "1"
+    except Exception as e:
+        sys.stderr.write(f"[WebChecker] 自動安裝 Chromium 例外：{type(e).__name__}: {e}\n")
+
+
+_ensure_playwright_chromium()
+
+
 from webchecker_core import (
     APP_MODE_SCAN, APP_MODE_FAV, APP_MODE_EXCLUDE, APP_MODE_INDICATOR_HELP,
     SCAN_ENGINE_BUILD,
@@ -15,12 +85,6 @@ from webchecker_core import (
     _probe_cache_get,
     get_pagespeed_score, _run_scan_parallel_batch,
 )
-
-# 確保雲端環境自動安裝 Playwright 所需的 Chromium 瀏覽器（每個執行個體只做一次）
-_PW_INSTALL_FLAG = "WC_PLAYWRIGHT_CHROMIUM_INSTALLED"
-if os.environ.get("STREAMLIT_RUNTIME_ENV") and not os.environ.get(_PW_INSTALL_FLAG):
-    os.environ[_PW_INSTALL_FLAG] = "1"
-    os.system("playwright install chromium")
 
 def _ordered_visited_urls_for_export():
     return ordered_visited_urls_for_export(

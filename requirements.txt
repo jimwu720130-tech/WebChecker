@@ -7,3 +7,4 @@ urllib3
 xlsxwriter
 fake-useragent
 tenacity
+playwright>=1.49

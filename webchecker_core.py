@@ -2535,7 +2535,18 @@ async def _run_scan_parallel_batch(targets,url_norm,scope_root,referer_url,host_
     probe_cache=external_probe_cache
     batch_ext_sem=asyncio.Semaphore(_BATCH_EXTERNAL_PROBE_CONCURRENCY)
     async with async_playwright() as p:
-        browser=await p.chromium.launch(headless=True)
+        # Streamlit Cloud 等容器化環境啟動 Chromium 必須關閉沙盒並改用 /tmp 而非 /dev/shm，
+        # 否則會以「Target page, context or browser has been closed」或「Failed to launch」失敗。
+        # 本機 Windows 加上這些參數亦無副作用。
+        browser=await p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-setuid-sandbox",
+            ],
+        )
         try:
             async def work(t):
                 async with sem:
