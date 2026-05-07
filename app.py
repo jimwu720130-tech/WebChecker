@@ -494,6 +494,9 @@ if st.session_state.app_mode==APP_MODE_SCAN:
     else:
         input_url=""
     url_norm=normalize_url_input(input_url)
+    # 掃描進行中不要因輸入框被清空而失去網域（Playwright 端 target_domain 會變空、整站只掃 1 頁）
+    if st.session_state.get("is_scanning") and not (url_norm or "").strip():
+        url_norm=(st.session_state.get("scan_scope_root") or "").strip() or url_norm
     run_psi=st.session_state.get("run_psi",True)
     if start_scan:
         if url_norm:
@@ -559,7 +562,8 @@ if st.session_state.app_mode==APP_MODE_SCAN:
                 f"📊已完成 **{len(st.session_state.visited_urls)}** 頁｜佇列待處理 **{len(st.session_state.to_visit_urls)}** 筆"
             )
             _sc=st.session_state.get("scan_scope_root")or url_norm
-            _ref=(st.session_state.visited_order[-1]if st.session_state.visited_order else _site_root_url(url_norm))
+            _root_for_ref=(url_norm or st.session_state.get("scan_scope_root")or"").strip()
+            _ref=(st.session_state.visited_order[-1]if st.session_state.visited_order else _site_root_url(_root_for_ref))
             with st.spinner("⏳ Playwright 掃描中（含分頁與檔案按鈕時可能需數分鐘，畫面會暫停更新屬正常）…"):
                 try:
                     results=_run_scan_parallel_batch_in_worker_thread(
@@ -578,14 +582,19 @@ if st.session_state.app_mode==APP_MODE_SCAN:
                     st.session_state.to_visit_urls.insert(0,t)
                     st.session_state.setdefault("_scan_page_exceptions",[]).append(f"{t}: {type(res).__name__}: {res}")
                     continue
-                # 後相容：舊版 check_single_page 回傳 7 元素，未含 ext_src_map；新版 8 元素。
-                if isinstance(res,tuple) and len(res)>=8:
+                # 後相容：7→8（ext_src_map）→9（enqueue_scope）；入佇列過濾需與 core 內 link_queue_scope 一致
+                if isinstance(res,tuple) and len(res)>=9:
+                    errs,html,found,links,final_url,ext_bad,ext_probed,ext_src_map,enqueue_scope=res[:9]
+                elif isinstance(res,tuple) and len(res)>=8:
                     errs,html,found,links,final_url,ext_bad,ext_probed,ext_src_map=res[:8]
+                    enqueue_scope=None
                 else:
                     errs,html,found,links,final_url,ext_bad,ext_probed=res[:7]
                     ext_src_map={}
+                    enqueue_scope=None
                 if not isinstance(ext_src_map,dict):
                     ext_src_map={}
+                _eff_sc=enqueue_scope if enqueue_scope is not None else _sc
                 st.session_state.visited_urls.add(t)
                 st.session_state.visited_order.append(t)
                 _src_map=st.session_state.setdefault("external_probed_source",{})
@@ -626,7 +635,7 @@ if st.session_state.app_mode==APP_MODE_SCAN:
                     if _probe_cache_get(_pc, normalize_external_probe_url(x)or x)is not True
                 ]
                 for l in links:
-                    if not url_in_scan_scope(l,_sc):continue
+                    if not url_in_scan_scope(l,_eff_sc):continue
                     if l not in st.session_state.visited_urls:
                         st.session_state.to_visit_urls.append(l)
             if st.session_state.get("_scan_page_exceptions"):

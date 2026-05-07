@@ -4,7 +4,7 @@ import sys
 import logging
 
 # 供除錯／版本確認：與 Streamlit 側欄「檢核核心版本」應一致
-SCAN_ENGINE_BUILD = "2026-05-07-p31"
+SCAN_ENGINE_BUILD = "2026-05-08-p33"
 import random
 import requests
 import urllib3
@@ -345,7 +345,10 @@ def url_in_scan_scope(link_url:str,scope_url:str)->bool:
     if base is None:return True
     lp=ll.path or"/"
     if not lp.startswith("/"):lp="/"+lp
-    return lp==base or lp.startswith(base+"/")
+    lb=base if (base or "").startswith("/") else"/"+base
+    lp_l=lp.lower()
+    lb_l=lb.lower()
+    return lp_l==lb_l or lp_l.startswith(lb_l+"/")
 
 # ==========================================
 # 智慧型URL編碼校正 (徹底解決中文路徑與重複編碼問題)
@@ -2453,7 +2456,7 @@ async def check_single_page(
     extracted_links,html_content,final_url=set(),"",url # 預初始化避免UnboundLocalError
     external_failed,external_probed=[],[]
     probe_cache=external_probe_cache if external_probe_cache is not None else {}
-    
+    enqueue_scope_hint=None  # 供 app 入佇列過濾；同站導向範圍外時改為網域根，避免與 session scan_scope_root 不一致
     # 網址標準化處理
     safe_url=make_safe_url(url)
     file_exts=list(_SCAN_FILE_EXTENSIONS)
@@ -2472,7 +2475,7 @@ async def check_single_page(
             # 對 .pdf／.docx 等檔案連結而言**屬下載成功**，連結是有效的；不要捕到後置回失敗。
             if is_requested_as_file and "download" in (str(nav_err) or "").lower():
                 await page.close()
-                return page_errors,"",detail_found,set(),url,[],[],{}
+                return page_errors,"",detail_found,set(),url,[],[],{},None
             raise
         nav_recovered=False
         content_type=""
@@ -2489,18 +2492,18 @@ async def check_single_page(
                     bad_file=True
                 if bad_file:
                     await page.close()
-                    return["5.有效連結"],"",detail_found,set(),url,[],[],{}
+                    return["5.有效連結"],"",detail_found,set(),url,[],[],{},None
         else:
             # 登入／挑戰頁等：首包可能無 response 或 status≥400，但主框架已導向同站 HTML
             if is_requested_as_file:
                 await page.close()
-                return["5.有效連結"],"",detail_found,set(),url,[],[],{}
+                return["5.有效連結"],"",detail_found,set(),url,[],[],{},None
             # 真正破損的 4xx/5xx（如 IIS `/EN/.div_xxx` 走 404+big5 預設頁）必須列入 5.有效連結；
             # 否則程式會「復原」進入 charset 檢查，把錯誤碼網址誤判成「3.語系編碼」。
             # 僅 401/403/407/429（需登入／節流等）與 503（暫時不可用）視為可恢復。
             if st is not None and not _http_status_reachable_for_external_check(st):
                 await page.close()
-                return["5.有效連結"],"",detail_found,set(),url,[],[],{}
+                return["5.有效連結"],"",detail_found,set(),url,[],[],{},None
             try:
                 await page.wait_for_load_state("domcontentloaded",timeout=20000)
             except Exception:
@@ -2516,7 +2519,7 @@ async def check_single_page(
                 dom_ok=False
             if not dom_ok:
                 await page.close()
-                return["5.有效連結"],"",detail_found,set(),url,[],[],{}
+                return["5.有效連結"],"",detail_found,set(),url,[],[],{},None
             nav_recovered=True
             content_type="text/html"
 
@@ -2525,7 +2528,7 @@ async def check_single_page(
             _ct_img=(content_type or"").lower().split(";")[0].strip()
             if _ct_img.startswith(("image/","audio/","video/","font/")):
                 await page.close()
-                return page_errors,"",detail_found,set(),url,[],[],{}
+                return page_errors,"",detail_found,set(),url,[],[],{},None
 
         # ── 非副檔名 URL 但回傳文件型 MIME（.ashx / DownFile.aspx 等下載處理器） ──
         # 立即返回，避免等待 domcontentloaded 逾時或解析 binary 資料（復原導向後勿信首包 headers）
@@ -2539,7 +2542,7 @@ async def check_single_page(
                 if any(p in _ct0 for p in _OFFICE_MIME_PARTS):
                     page_errors.append("10.文件格式")
                 await page.close()
-                return page_errors,"",detail_found,set(),url,[],[],{}
+                return page_errors,"",detail_found,set(),url,[],[],{},None
 
         # 指標10：文件格式檢核
         if any(url.lower().endswith(ext)for ext in[".doc",".docx",".xls",".xlsx",".ppt",".pptx",".rar",".odt",".ods",".odp"]):
@@ -2548,7 +2551,7 @@ async def check_single_page(
         # 若確診為檔案，直接返回，不再進行JS渲染
         if is_requested_as_file:
             await page.close()
-            return page_errors,"",detail_found,set(),url,[],[],{}
+            return page_errors,"",detail_found,set(),url,[],[],{},None
 
         # 正常網頁解析
         try:
@@ -2572,10 +2575,19 @@ async def check_single_page(
         final_url=page.url
         if not _same_scan_site(urlparse(final_url).netloc,target_domain):
             await page.close()
-            return page_errors,"",detail_found,set(),final_url,[],[],{}
-        if scope_root_url and not url_in_scan_scope(final_url,scope_root_url):
-            await page.close()
-            return page_errors,"",detail_found,set(),final_url,[],[],{}
+            return page_errors,"",detail_found,set(),final_url,[],[],{},None
+        # 納入待掃佇列時使用的路徑範圍（與 scope_root_url 相同，除非同站被導向原範圍外）
+        link_queue_scope = scope_root_url
+        if scope_root_url and not url_in_scan_scope(final_url, scope_root_url):
+            sh_u = urlparse((scope_root_url or "").strip()).netloc.lower()
+            sh_f = urlparse((final_url or "").strip()).netloc.lower()
+            if not _same_scan_site(sh_f, sh_u):
+                await page.close()
+                return page_errors,"",detail_found,set(),final_url,[],[],{},None
+            # 以子路徑為入口卻被導回首頁等「範圍外」同站頁時，若維持原前綴過濾會 0 筆連結→只掃 1 頁；
+            # 改以網域根為範圍擷取站內 href，後續仍僅限同 registrable site。
+            link_queue_scope = _site_root_url(final_url)
+        enqueue_scope_hint = link_queue_scope
 
         page_text=await page.evaluate("document.body.innerText")
         html_content=await page.content()
@@ -2612,8 +2624,8 @@ async def check_single_page(
             page,browser_context,final_url,target_domain,file_exts,
             ext_http_seen=ext_http_seen,ext_http_sources=ext_http_sources,
         )
-        if scope_root_url:
-            extracted_links={u for u in extracted_links if url_in_scan_scope(u,scope_root_url)}
+        if link_queue_scope:
+            extracted_links={u for u in extracted_links if url_in_scan_scope(u, link_queue_scope)}
         html_content=await page.content()
         _post_html_set=extract_external_http_links(html_content,final_url,target_domain)
         _post_dom_set=await _external_http_hrefs_from_item_live_dom(
@@ -2653,13 +2665,22 @@ async def check_single_page(
         _src_map_ret=ext_http_sources  # type: ignore[name-defined]
     except NameError:
         _src_map_ret={}
-    return page_errors,html_content,detail_found,extracted_links,final_url,external_failed,external_probed,_src_map_ret
+    return page_errors,html_content,detail_found,extracted_links,final_url,external_failed,external_probed,_src_map_ret,enqueue_scope_hint
 
 async def _run_scan_parallel_batch(targets,url_norm,scope_root,referer_url,host_concurrency:int=4,external_probe_cache:Optional[dict]=None,page_exceptions:Optional[List[str]]=None):
     """同一網域下以 3～5 上限之併發數掃描一批網址（各頁獨立 Context 與 UA）。"""
     if not targets:
         return []
-    td=urlparse(url_norm).netloc.lower()
+    # Streamlit 每輪重算 url_norm：掃描中若使用者清空「自訂網站」會變成空字串，導致 td==""、
+    # _same_scan_site 永遠失敗、連結擷取為空→只完成 1 頁。以 scope_root／本批網址兜底。
+    td=urlparse((url_norm or "").strip()).netloc.lower()
+    if not td:
+        td=urlparse((scope_root or "").strip()).netloc.lower()
+    if not td:
+        for x in targets:
+            td=urlparse((x or "").strip()).netloc.lower()
+            if td:
+                break
     cap=max(1,int(host_concurrency or 4))
     sem=asyncio.Semaphore(cap)
     if external_probe_cache is None:external_probe_cache={}
@@ -2697,7 +2718,7 @@ async def _run_scan_parallel_batch(targets,url_norm,scope_root,referer_url,host_
                     except asyncio.TimeoutError as e:
                         if page_exceptions is not None:
                             page_exceptions.append(f"{t}: TimeoutError: page scan exceeded {_PAGE_SCAN_TIMEOUT_S}s")
-                        return [],"",{k:False for k in ["favicon","privacy","security","phone","address","open_data","accessibility","nav","lang_ver","search","opinion","rwd","stats","date_info"]},set(),t,[],[],{}
+                        return [],"",{k:False for k in ["favicon","privacy","security","phone","address","open_data","accessibility","nav","lang_ver","search","opinion","rwd","stats","date_info"]},set(),t,[],[],{},None
                     finally:
                         await ctx.close()
             return await asyncio.gather(*[work(x)for x in targets],return_exceptions=True)
