@@ -1576,14 +1576,37 @@ async def _try_advance_pagination_aspnetish_table(page, st0) -> bool:
     return await _pagination_state_key(page) != st0
 
 async def gather_extracted_links_for_visible_page(
-    page,browser_context,final_url,target_domain,file_exts,ext_http_seen:Optional[set]=None
+    page,browser_context,final_url,target_domain,file_exts,
+    ext_http_seen:Optional[set]=None,
+    ext_http_sources:Optional[dict]=None,
 ):
+    """擷取目前畫面之站內可訪問連結與外站連結。
+
+    ext_http_sources：若提供，記錄「**外站 URL → 擷取當下實際可見的站內頁面 URL 列表**」之對映；
+    分頁／Tab 切換時 `page.url` 可能與初次導航之 final_url 不同，故以**當下** `page.url` 作為來源頁，
+    讓報表「來源站內頁面」反映該外連在 DOM 中真正出現的那個分頁，而非掃描入口頁。
+    """
     html_content=await page.content()
     if ext_http_seen is not None:
-        ext_http_seen|=extract_external_http_links(html_content,final_url,target_domain)
-        ext_http_seen|=await _external_http_hrefs_from_item_live_dom(
+        new_html_set=extract_external_http_links(html_content,final_url,target_domain)
+        new_dom_set=await _external_http_hrefs_from_item_live_dom(
             page, final_url, target_domain
         )
+        ext_http_seen|=new_html_set
+        ext_http_seen|=new_dom_set
+        if ext_http_sources is not None:
+            try:
+                cur_src=(page.url or "").strip()
+            except Exception:
+                cur_src=""
+            if not cur_src or cur_src.lower().startswith("about:"):
+                cur_src=final_url
+            for u in (new_html_set | new_dom_set):
+                if not u:
+                    continue
+                _lst=ext_http_sources.setdefault(u,[])
+                if cur_src and cur_src not in _lst:
+                    _lst.append(cur_src)
     links=extract_same_domain_links(html_content,final_url,target_domain,file_exts)
     links|=await discover_download_links_from_file_buttons(page,browser_context,target_domain,file_exts)
     links|=await discover_document_labeled_anchor_urls(page,browser_context,target_domain,file_exts)
@@ -1898,11 +1921,14 @@ async def _try_advance_pagination__clickable_guess(el):
     except Exception:pass
     return True
 async def _collect_links_pagination_on_current_view(
-    page,browser_context,final_url,target_domain,file_exts,ext_http_seen:Optional[set]
+    page,browser_context,final_url,target_domain,file_exts,
+    ext_http_seen:Optional[set],
+    ext_http_sources:Optional[dict]=None,
 ):
     """單一『視圖』下（一個分頁狀態）：第一頁＋盡量往後翻，合併連結。"""
     out=await gather_extracted_links_for_visible_page(
-        page,browser_context,final_url,target_domain,file_exts,ext_http_seen=ext_http_seen
+        page,browser_context,final_url,target_domain,file_exts,
+        ext_http_seen=ext_http_seen,ext_http_sources=ext_http_sources,
     )
     seen_fp = {hash(await _pagination_state_key(page))}
     for _ in range(PAGINATION_MAX_STEPS):
@@ -1913,7 +1939,8 @@ async def _collect_links_pagination_on_current_view(
             break
         seen_fp.add(h)
         out|=await gather_extracted_links_for_visible_page(
-            page,browser_context,final_url,target_domain,file_exts,ext_http_seen=ext_http_seen
+            page,browser_context,final_url,target_domain,file_exts,
+            ext_http_seen=ext_http_seen,ext_http_sources=ext_http_sources,
         )
     return out
 
@@ -2075,7 +2102,9 @@ async def _wait_item_tab_list_ready(page):
     except Exception:pass
 
 async def collect_links_with_pagination(
-    page,browser_context,final_url,target_domain,file_exts,ext_http_seen:Optional[set]=None
+    page,browser_context,final_url,target_domain,file_exts,
+    ext_http_seen:Optional[set]=None,
+    ext_http_sources:Optional[dict]=None,
 ):
     """第一頁＋盡量翻頁；若頁面有 2+ 個 role=tab 或關鍵字 Tab，會依序點每個分頁各掃一輪內層分頁。
 
@@ -2101,7 +2130,8 @@ async def collect_links_with_pagination(
             await _wait_item_tab_list_ready(page)
             await page.wait_for_timeout(2000)
             out|=await _collect_links_pagination_on_current_view(
-                page,browser_context,final_url,target_domain,file_exts,ext_http_seen=ext_http_seen
+                page,browser_context,final_url,target_domain,file_exts,
+                ext_http_seen=ext_http_seen,ext_http_sources=ext_http_sources,
             )
         return out
     zh=await _zh_gov_service_tab_clicks(page)
@@ -2125,12 +2155,14 @@ async def collect_links_with_pagination(
             await _wait_item_tab_list_ready(page)
             await page.wait_for_timeout(2000)
             out|=await _collect_links_pagination_on_current_view(
-                page,browser_context,final_url,target_domain,file_exts,ext_http_seen=ext_http_seen
+                page,browser_context,final_url,target_domain,file_exts,
+                ext_http_seen=ext_http_seen,ext_http_sources=ext_http_sources,
             )
         return out
     if tcount < 2:
         return await _collect_links_pagination_on_current_view(
-            page,browser_context,final_url,target_domain,file_exts,ext_http_seen=ext_http_seen
+            page,browser_context,final_url,target_domain,file_exts,
+            ext_http_seen=ext_http_seen,ext_http_sources=ext_http_sources,
         )
     n=tcount
     for i in range(min(n,20)):
@@ -2150,7 +2182,8 @@ async def collect_links_with_pagination(
         except Exception:pass
         await page.wait_for_timeout(2000)
         out|=await _collect_links_pagination_on_current_view(
-            page,browser_context,final_url,target_domain,file_exts,ext_http_seen=ext_http_seen
+            page,browser_context,final_url,target_domain,file_exts,
+            ext_http_seen=ext_http_seen,ext_http_sources=ext_http_sources,
         )
     return out
 
@@ -2367,7 +2400,7 @@ async def check_single_page(
             # 對 .pdf／.docx 等檔案連結而言**屬下載成功**，連結是有效的；不要捕到後置回失敗。
             if is_requested_as_file and "download" in (str(nav_err) or "").lower():
                 await page.close()
-                return page_errors,"",detail_found,set(),url,[],[]
+                return page_errors,"",detail_found,set(),url,[],[],{}
             raise
         nav_recovered=False
         content_type=""
@@ -2384,18 +2417,18 @@ async def check_single_page(
                     bad_file=True
                 if bad_file:
                     await page.close()
-                    return["5.有效連結"],"",detail_found,set(),url,[],[]
+                    return["5.有效連結"],"",detail_found,set(),url,[],[],{}
         else:
             # 登入／挑戰頁等：首包可能無 response 或 status≥400，但主框架已導向同站 HTML
             if is_requested_as_file:
                 await page.close()
-                return["5.有效連結"],"",detail_found,set(),url,[],[]
+                return["5.有效連結"],"",detail_found,set(),url,[],[],{}
             # 真正破損的 4xx/5xx（如 IIS `/EN/.div_xxx` 走 404+big5 預設頁）必須列入 5.有效連結；
             # 否則程式會「復原」進入 charset 檢查，把錯誤碼網址誤判成「3.語系編碼」。
             # 僅 401/403/407/429（需登入／節流等）與 503（暫時不可用）視為可恢復。
             if st is not None and not _http_status_reachable_for_external_check(st):
                 await page.close()
-                return["5.有效連結"],"",detail_found,set(),url,[],[]
+                return["5.有效連結"],"",detail_found,set(),url,[],[],{}
             try:
                 await page.wait_for_load_state("domcontentloaded",timeout=20000)
             except Exception:
@@ -2411,7 +2444,7 @@ async def check_single_page(
                 dom_ok=False
             if not dom_ok:
                 await page.close()
-                return["5.有效連結"],"",detail_found,set(),url,[],[]
+                return["5.有效連結"],"",detail_found,set(),url,[],[],{}
             nav_recovered=True
             content_type="text/html"
 
@@ -2420,7 +2453,7 @@ async def check_single_page(
             _ct_img=(content_type or"").lower().split(";")[0].strip()
             if _ct_img.startswith(("image/","audio/","video/","font/")):
                 await page.close()
-                return page_errors,"",detail_found,set(),url,[],[]
+                return page_errors,"",detail_found,set(),url,[],[],{}
 
         # ── 非副檔名 URL 但回傳文件型 MIME（.ashx / DownFile.aspx 等下載處理器） ──
         # 立即返回，避免等待 domcontentloaded 逾時或解析 binary 資料（復原導向後勿信首包 headers）
@@ -2434,7 +2467,7 @@ async def check_single_page(
                 if any(p in _ct0 for p in _OFFICE_MIME_PARTS):
                     page_errors.append("10.文件格式")
                 await page.close()
-                return page_errors,"",detail_found,set(),url,[],[]
+                return page_errors,"",detail_found,set(),url,[],[],{}
 
         # 指標10：文件格式檢核
         if any(url.lower().endswith(ext)for ext in[".doc",".docx",".xls",".xlsx",".ppt",".pptx",".rar",".odt",".ods",".odp"]):
@@ -2443,7 +2476,7 @@ async def check_single_page(
         # 若確診為檔案，直接返回，不再進行JS渲染
         if is_requested_as_file:
             await page.close()
-            return page_errors,"",detail_found,set(),url,[],[]
+            return page_errors,"",detail_found,set(),url,[],[],{}
 
         # 正常網頁解析
         try:
@@ -2467,10 +2500,10 @@ async def check_single_page(
         final_url=page.url
         if urlparse(final_url).netloc.lower()!=target_domain:
             await page.close()
-            return page_errors,"",detail_found,set(),final_url,[],[]
+            return page_errors,"",detail_found,set(),final_url,[],[],{}
         if scope_root_url and not url_in_scan_scope(final_url,scope_root_url):
             await page.close()
-            return page_errors,"",detail_found,set(),final_url,[],[]
+            return page_errors,"",detail_found,set(),final_url,[],[],{}
 
         page_text=await page.evaluate("document.body.innerText")
         html_content=await page.content()
@@ -2499,16 +2532,34 @@ async def check_single_page(
         if any(kw in html_content.lower() for kw in ['google-analytics','gtag']):detail_found["stats"]=True
 
         ext_http_seen=set()
+        # 外站 URL → 出現該連結之站內頁面 URL 列表（依出現順序、去重）。
+        # 分頁／Tab 切換時 page.url 變動之追蹤已內建於 gather_extracted_links_for_visible_page；
+        # 本處於迴圈結束後另行補抓「最後狀態」之 DOM，亦以當下 page.url 為來源頁，避免一律歸到掃描入口。
+        ext_http_sources={}
         extracted_links=await collect_links_with_pagination(
-            page,browser_context,final_url,target_domain,file_exts,ext_http_seen=ext_http_seen
+            page,browser_context,final_url,target_domain,file_exts,
+            ext_http_seen=ext_http_seen,ext_http_sources=ext_http_sources,
         )
         if scope_root_url:
             extracted_links={u for u in extracted_links if url_in_scan_scope(u,scope_root_url)}
         html_content=await page.content()
-        ext_urls=ext_http_seen|extract_external_http_links(html_content,final_url,target_domain)
-        ext_urls|=await _external_http_hrefs_from_item_live_dom(
+        _post_html_set=extract_external_http_links(html_content,final_url,target_domain)
+        _post_dom_set=await _external_http_hrefs_from_item_live_dom(
             page, final_url, target_domain
         )
+        ext_urls=ext_http_seen|_post_html_set|_post_dom_set
+        try:
+            _post_src=(page.url or "").strip()
+        except Exception:
+            _post_src=""
+        if not _post_src or _post_src.lower().startswith("about:"):
+            _post_src=final_url
+        for _u in (_post_html_set|_post_dom_set):
+            if not _u:
+                continue
+            _slist=ext_http_sources.setdefault(_u,[])
+            if _post_src and _post_src not in _slist:
+                _slist.append(_post_src)
         ref_probe=(final_url or"").strip()
         if not ref_probe or ref_probe.lower().startswith("about:"):
             ref_probe=(referer_url or"").strip()
@@ -2522,7 +2573,12 @@ async def check_single_page(
         if page_exceptions is not None:
             page_exceptions.append(f"{url}: {type(e).__name__}: {e}")
     finally:await page.close()
-    return page_errors,html_content,detail_found,extracted_links,final_url,external_failed,external_probed
+    # 若 except 路徑進來、ext_http_sources 仍未定義，提供安全預設讓上層解包不會 NameError
+    try:
+        _src_map_ret=ext_http_sources  # type: ignore[name-defined]
+    except NameError:
+        _src_map_ret={}
+    return page_errors,html_content,detail_found,extracted_links,final_url,external_failed,external_probed,_src_map_ret
 
 async def _run_scan_parallel_batch(targets,url_norm,scope_root,referer_url,host_concurrency:int=4,external_probe_cache:Optional[dict]=None,page_exceptions:Optional[List[str]]=None):
     """同一網域下以 3～5 上限之併發數掃描一批網址（各頁獨立 Context 與 UA）。"""
@@ -2566,7 +2622,7 @@ async def _run_scan_parallel_batch(targets,url_norm,scope_root,referer_url,host_
                     except asyncio.TimeoutError as e:
                         if page_exceptions is not None:
                             page_exceptions.append(f"{t}: TimeoutError: page scan exceeded {_PAGE_SCAN_TIMEOUT_S}s")
-                        return [],"",{k:False for k in ["favicon","privacy","security","phone","address","open_data","accessibility","nav","lang_ver","search","opinion","rwd","stats","date_info"]},set(),t,[],[]
+                        return [],"",{k:False for k in ["favicon","privacy","security","phone","address","open_data","accessibility","nav","lang_ver","search","opinion","rwd","stats","date_info"]},set(),t,[],[],{}
                     finally:
                         await ctx.close()
             return await asyncio.gather(*[work(x)for x in targets],return_exceptions=True)

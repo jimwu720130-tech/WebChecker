@@ -538,7 +538,14 @@ if st.session_state.app_mode==APP_MODE_SCAN:
                     st.session_state.to_visit_urls.insert(0,t)
                     st.session_state.setdefault("_scan_page_exceptions",[]).append(f"{t}: {type(res).__name__}: {res}")
                     continue
-                errs,html,found,links,final_url,ext_bad,ext_probed=res
+                # 後相容：舊版 check_single_page 回傳 7 元素，未含 ext_src_map；新版 8 元素。
+                if isinstance(res,tuple) and len(res)>=8:
+                    errs,html,found,links,final_url,ext_bad,ext_probed,ext_src_map=res[:8]
+                else:
+                    errs,html,found,links,final_url,ext_bad,ext_probed=res[:7]
+                    ext_src_map={}
+                if not isinstance(ext_src_map,dict):
+                    ext_src_map={}
                 st.session_state.visited_urls.add(t)
                 st.session_state.visited_order.append(t)
                 _src_map=st.session_state.setdefault("external_probed_source",{})
@@ -547,10 +554,16 @@ if st.session_state.app_mode==APP_MODE_SCAN:
                     if nu not in st.session_state.external_probed_seen:
                         st.session_state.external_probed_seen.add(nu)
                         st.session_state.external_probed_order.append(nu)
-                    # 同一外站可能出現於多個站內頁；逐一附加並去重，保留出現順序。
+                    # 來源頁優先用 webchecker_core 在分頁／Tab 切換時就地擷取的 page.url；
+                    # 同一外站可能出現於多個站內頁，逐一附加並去重、保留出現順序。
                     _lst=_src_map.setdefault(nu,[])
-                    if t not in _lst:
-                        _lst.append(t)
+                    _actual_sources=ext_src_map.get(u) or ext_src_map.get(nu) or []
+                    # 若擷取階段未紀錄到任何來源（極少見：被 except 路徑提前返回等），fallback 為掃描入口頁
+                    if not _actual_sources:
+                        _actual_sources=[t]
+                    for _s in _actual_sources:
+                        if _s and _s not in _lst:
+                            _lst.append(_s)
                 for k,v in found.items():
                     if v:st.session_state.global_features[k]=True
                 for e in errs:
