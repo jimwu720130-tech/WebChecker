@@ -4,7 +4,7 @@ import sys
 import logging
 
 # 供除錯／版本確認：與 Streamlit 側欄「檢核核心版本」應一致
-SCAN_ENGINE_BUILD = "2026-05-07-p30"
+SCAN_ENGINE_BUILD = "2026-05-07-p31"
 import random
 import requests
 import urllib3
@@ -261,6 +261,43 @@ def path_scope_base_parts(scope_url:str):
             base=par
     return host,base
 
+# 二階層「公開後綴」：同一組織下 rrms.eri.com.tw 與 www.rrms.eri.com.tw 應視為同站；
+# recycle.moenv.gov.tw 與 www.recycle.moenv.gov.tw 同理。
+_MULTI_SUFFIX_TLDS=(
+    "com.tw","gov.tw","edu.tw","org.tw","net.tw",
+    "co.uk","org.uk","ac.uk",
+    "co.jp","ne.jp","or.jp",
+    "com.hk","gov.hk","edu.hk",
+    "com.au","net.au","org.au",
+)
+
+def _registrable_site_key(netloc:str)->str:
+    """將 hostname 對應到『同一組織站台』之鍵（台灣二階網域與 www 別名）。"""
+    h=(netloc or"").lower().split(":")[0].strip(".")
+    if not h:
+        return""
+    parts=h.split(".")
+    if len(parts)<2:
+        return h
+    for suf in _MULTI_SUFFIX_TLDS:
+        k=len(suf.split("."))
+        if len(parts)>=k and".".join(parts[-k:])==suf:
+            if len(parts)>=k+1:
+                return".".join(parts[-(k+1):])
+            return suf
+    if len(parts)>=3 and parts[0]=="www":
+        return".".join(parts[1:])
+    return h
+
+def _same_scan_site(host_a:str,host_b:str)->bool:
+    ha=(host_a or"").lower().split(":")[0].strip(".")
+    hb=(host_b or"").lower().split(":")[0].strip(".")
+    if not ha or not hb:
+        return False
+    if ha==hb:
+        return True
+    return _registrable_site_key(ha)==_registrable_site_key(hb)
+
 def _random_read_delay_ms()->int:
     """模擬人類閱讀間隔（毫秒）。"""
     return random.randint(1000,3000)
@@ -302,7 +339,9 @@ def url_in_scan_scope(link_url:str,scope_url:str)->bool:
     if not(scope_url or"").strip():return True
     host,base=path_scope_base_parts(scope_url)
     ll=urlparse((link_url or"").strip())
-    if(ll.netloc or"").lower()!=host:return False
+    lh=(ll.netloc or"").lower()
+    if lh!=host and not _same_scan_site(lh,host):
+        return False
     if _is_public_download_storage_url(link_url):
         return True
     if base is None:return True
@@ -501,20 +540,18 @@ def extract_same_domain_links(html:str,page_url:str,target_domain:str,file_exts=
         rh=raw_href.strip()
         if rh.lower().startswith(('javascript:','mailto:','tel:','#','data:')):continue
         full=urljoin(page_url,rh).split('#')[0]
-        if urlparse(full).netloc.lower()!=td:continue
+        if not _same_scan_site(urlparse(full).netloc,td):continue
         if _should_skip_plain_image_url_for_crawl(full):continue
         extracted.add(full)
     try:
         flat=html_unescape(html)
-        host=re.escape(td)
-        # 路徑字元集不再排除 )；尾贅標點以 _trim_url_tail（會平衡括號）統一處理，
-        # 避免將 PDF 中文檔名含 () 之同網域連結截成假連結後送進待掃佇列。
-        for m in re.finditer(rf'https?://{host}(?:/[^\s\"\'<>]*)?',flat,re.I):
+        # 不以單一 hostname 寫死正則：入口為 rrms.eri.com.tw、頁面已導向 www.… 時仍能擷到同站 URL。
+        for m in re.finditer(r'https?://[^\s\"\'<>]+',flat,re.I):
             u=_trim_url_tail(m.group(0))
             if not u:continue
             if u.lower().startswith(('javascript:','mailto:','tel:','data:')):continue
             full=urljoin(page_url,u).split('#')[0]
-            if urlparse(full).netloc.lower()!=td:continue
+            if not _same_scan_site(urlparse(full).netloc,td):continue
             if _should_skip_plain_image_url_for_crawl(full):continue
             extracted.add(full)
     except Exception:pass
@@ -526,7 +563,7 @@ def extract_same_domain_links(html:str,page_url:str,target_domain:str,file_exts=
         if rh.lower().startswith(("javascript:","mailto:","tel:","#","data:")):
             continue
         full=urljoin(page_url,rh).split("#")[0]
-        if urlparse(full).netloc.lower()!=td:
+        if not _same_scan_site(urlparse(full).netloc,td):
             continue
         if _should_skip_plain_image_url_for_crawl(full):
             continue
@@ -540,7 +577,7 @@ def extract_same_domain_links(html:str,page_url:str,target_domain:str,file_exts=
         if _looks_like_css_selector(rh):
             return
         full=urljoin(page_url,rh).split("#")[0]
-        if urlparse(full).netloc.lower()!=td:
+        if not _same_scan_site(urlparse(full).netloc,td):
             return
         if _should_skip_plain_image_url_for_crawl(full):
             return
@@ -589,7 +626,7 @@ def extract_external_http_links(html:str,page_url:str,site_host:str)->set:
         if(p.scheme or"").lower()not in("http","https"):
             continue
         host=(p.netloc or"").lower()
-        if not host or host==sh:
+        if not host or _same_scan_site(host,sh):
             continue
         if len(full)>4096:
             continue
@@ -625,7 +662,7 @@ async def _external_http_hrefs_from_item_live_dom(page, page_url: str, site_host
             let p; try { p = new URL(u); } catch (e) { continue; }
             if (p.protocol !== "http:" && p.protocol !== "https:") continue;
             if (!p.hostname) continue;
-            if (p.hostname.toLowerCase() === sh) continue;
+            // Python 端再以 registrable site / www 別名過濾；此處放寬避免漏列。
             if (seen.has(u)) continue;
             seen.add(u);
             out.push(u);
@@ -636,7 +673,20 @@ async def _external_http_hrefs_from_item_live_dom(page, page_url: str, site_host
         )
     except Exception:
         return set()
-    return {normalize_external_probe_url(u) for u in (hrefs or []) if u and normalize_external_probe_url(u)}
+    out=set()
+    for u in hrefs or []:
+        if not u:
+            continue
+        try:
+            hn=urlparse(u).netloc
+        except Exception:
+            continue
+        if _same_scan_site(hn,sh):
+            continue
+        nu=normalize_external_probe_url(u)
+        if nu:
+            out.add(nu)
+    return out
 
 def _http_status_reachable_for_external_check(status:int)->bool:
     if status is None:
@@ -1076,7 +1126,7 @@ async def probe_external_links_unreachable(
 
 def _url_matches_download_candidate(u:str,td:str,file_exts):
     try:
-        if urlparse(u).netloc.lower()!=td:return False
+        if not _same_scan_site(urlparse(u).netloc,td):return False
         low=u.lower().split("?",1)[0]
         if any(low.endswith(ext) for ext in file_exts):return True
         if _is_public_download_storage_url(u):
@@ -1170,7 +1220,7 @@ async def discover_download_links_from_file_buttons(page,browser_context,target_
             fu=f.url or""
             if f is page.main_frame:
                 frames.append(f);continue
-            if fu.lower().startswith("about:")or urlparse(fu).netloc.lower()==td:
+            if fu.lower().startswith("about:")or _same_scan_site(urlparse(fu).netloc,td):
                 frames.append(f)
     except Exception:
         frames=[page.main_frame]
@@ -1192,7 +1242,7 @@ async def discover_download_links_from_file_buttons(page,browser_context,target_
             def on_response(response):
                 try:
                     u=response.url
-                    if td not in u.lower():return
+                    if not _same_scan_site(urlparse(u).netloc,td):return
                     if not _url_matches_download_candidate(u,td,file_exts):return
                     ct=(response.headers.get("content-type")or"").lower()
                     if any(u.lower().split("?")[0].endswith(ext) for ext in file_exts)or"pdf"in ct or"octet-stream"in ct or"msword"in ct or"officedocument"in ct or"opendocument"in ct:
@@ -1203,7 +1253,7 @@ async def discover_download_links_from_file_buttons(page,browser_context,target_
             def on_download(d):
                 try:
                     u=d.url
-                    if u and urlparse(u).netloc.lower()==td:dl_urls.append(u.split("#")[0])
+                    if u and _same_scan_site(urlparse(u).netloc,td):dl_urls.append(u.split("#")[0])
                 except Exception:pass
             page.on("request",on_request)
             page.on("response",on_response)
@@ -1236,7 +1286,7 @@ async def discover_download_links_from_file_buttons(page,browser_context,target_
                 for p in browser_context.pages[pages_before:]:
                     try:
                         u=p.url
-                        if urlparse(u).netloc.lower()==td:out.add(u.split("#")[0])
+                        if _same_scan_site(urlparse(u).netloc,td):out.add(u.split("#")[0])
                     except Exception:pass
                     try:await p.close()
                     except Exception:pass
@@ -1274,7 +1324,7 @@ async def discover_document_labeled_anchor_urls(page,browser_context,target_doma
             fu=f.url or""
             if f is page.main_frame:
                 frames.append(f);continue
-            if fu.lower().startswith("about:")or urlparse(fu).netloc.lower()==td:
+            if fu.lower().startswith("about:")or _same_scan_site(urlparse(fu).netloc,td):
                 frames.append(f)
     except Exception:
         frames=[page.main_frame]
@@ -1310,7 +1360,7 @@ async def discover_document_labeled_anchor_urls(page,browser_context,target_doma
                     continue
                 rh=href.strip()
                 full=urljoin(base_u,rh).split("#")[0]
-                if urlparse(full).netloc.lower()!=td:
+                if not _same_scan_site(urlparse(full).netloc,td):
                     continue
                 low_path=full.lower().split("?",1)[0]
                 href_has_doc_ext=any(low_path.endswith(ext)for ext in file_exts)
@@ -1333,7 +1383,7 @@ async def discover_document_labeled_anchor_urls(page,browser_context,target_doma
                 def on_response(response):
                     try:
                         u=response.url
-                        if td not in u.lower():return
+                        if not _same_scan_site(urlparse(u).netloc,td):return
                         if not _url_matches_download_candidate(u,td,file_exts):return
                         ct=(response.headers.get("content-type")or"").lower()
                         if any(u.lower().split("?")[0].endswith(ext)for ext in file_exts)or"pdf"in ct or"octet-stream"in ct or"msword"in ct or"officedocument"in ct or"opendocument"in ct:
@@ -1344,7 +1394,7 @@ async def discover_document_labeled_anchor_urls(page,browser_context,target_doma
                 def on_download(d):
                     try:
                         u=d.url
-                        if u and urlparse(u).netloc.lower()==td:dl_urls.append(u.split("#")[0])
+                        if u and _same_scan_site(urlparse(u).netloc,td):dl_urls.append(u.split("#")[0])
                     except Exception:pass
                 page.on("request",on_request)
                 page.on("response",on_response)
@@ -1378,7 +1428,7 @@ async def discover_document_labeled_anchor_urls(page,browser_context,target_doma
                     for p in browser_context.pages[pages_before:]:
                         try:
                             u=p.url
-                            if urlparse(u).netloc.lower()==td:out.add(u.split("#")[0])
+                            if _same_scan_site(urlparse(u).netloc,td):out.add(u.split("#")[0])
                         except Exception:pass
                         try:await p.close()
                         except Exception:pass
@@ -2461,7 +2511,7 @@ async def check_single_page(
             try:
                 dom_ok=(
                     bool(final_url)
-                    and urlparse(final_url).netloc.lower()==target_domain.lower()
+                    and _same_scan_site(urlparse(final_url).netloc,target_domain)
                     and not final_url.lower().startswith("about:")
                 )
             except Exception:
@@ -2522,7 +2572,7 @@ async def check_single_page(
         except Exception:
             pass
         final_url=page.url
-        if urlparse(final_url).netloc.lower()!=target_domain:
+        if not _same_scan_site(urlparse(final_url).netloc,target_domain):
             await page.close()
             return page_errors,"",detail_found,set(),final_url,[],[],{}
         if scope_root_url and not url_in_scan_scope(final_url,scope_root_url):
