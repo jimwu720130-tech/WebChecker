@@ -185,13 +185,22 @@ def load_favorites():
         except:pass
     return []
 
+# 在模組頂層做容錯 import：避免「函式內動態 import」在 Streamlit hot-reload
+# 期間造成 sys.modules 半新半舊狀態，引發 `KeyError: 'webchecker_core'`。
+try:
+    import cloud_persistence as _cloud_persistence  # type: ignore[import-not-found]
+except Exception:
+    _cloud_persistence = None  # type: ignore[assignment]
+
+
 def _try_cloud_save(filename:str,payload:str)->None:
     """最佳努力同步至 GitHub Gist（若已設定憑證）；失敗僅 stderr，不拋例外，避免凍結 UI。"""
+    if _cloud_persistence is None:
+        return
     try:
-        import cloud_persistence
-        cloud_persistence.save(filename, payload)
+        _cloud_persistence.save(filename, payload)
     except Exception:
-        # 模組缺漏或其他例外時靜默：本機檔已寫入，雲端同步只是錦上添花
+        # 任何例外靜默：本機檔已寫入，雲端同步只是錦上添花
         pass
 
 

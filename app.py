@@ -115,14 +115,23 @@ from webchecker_core import (
 )
 
 
+# 與 webchecker_core 同樣的策略：頂層容錯 import，避免 Streamlit hot-reload
+# 把動態 import 撞成 sys.modules 不一致狀態，引發 KeyError。
+try:
+    import cloud_persistence as _cloud_persistence  # type: ignore[import-not-found]
+except Exception:
+    _cloud_persistence = None  # type: ignore[assignment]
+
+
 @st.cache_resource(show_spinner=False)
 def _bootstrap_cloud_data():
     """於容器啟動時（每個 Streamlit 進程僅執行一次）將 Gist 上之最新內容拉到本機檔案，
     使後續 ``load_favorites`` / ``load_config`` 直接讀本機即可，避免每次 rerun 打 GitHub API。"""
+    if _cloud_persistence is None:
+        return True
     try:
-        import cloud_persistence
-        if cloud_persistence.is_enabled():
-            cloud_persistence.pull_to_local_files({
+        if _cloud_persistence.is_enabled():
+            _cloud_persistence.pull_to_local_files({
                 "favorites.json": "favorites.json",
                 "config.json": "config.json",
             })
