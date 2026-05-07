@@ -187,6 +187,25 @@ section[data-testid="stSidebar"]{background:#1a2332!important;border-right:1px s
 .stSidebar .stText,.stSidebar p,.stSidebar span{color:#e6edf3!important;}
 h1,h2,h3,.stMarkdown h1,.stMarkdown h2,.stMarkdown h3,.stMarkdown p,.stMarkdown li,
 .stMarkdown code,label,.stText{color:#e6edf3!important;}
+/* Streamlit 頂端工具列（Share／Deploy／GitHub 等）：新版預設白底，深色模式改為與主區一致 */
+[data-testid="stHeader"],header[data-testid="stHeader"],
+[data-testid="stDecoration"],[data-testid="stToolbar"],[data-testid="stToolbarActions"]{
+  background-color:#0f1419!important;background-image:none!important;
+  border-bottom:1px solid #2d3a4d!important;
+}
+[data-testid="stHeader"] button,[data-testid="stToolbar"] button,[data-testid="stToolbarActions"] button{
+  color:#e6edf3!important;background:transparent!important;border-color:#3d4f66!important;
+}
+[data-testid="stHeader"] a,[data-testid="stToolbar"] a,[data-testid="stToolbarActions"] a{
+  color:#8ab4ff!important;
+}
+[data-testid="stHeader"] svg,[data-testid="stToolbar"] svg,[data-testid="stToolbarActions"] svg,
+[data-testid="stDecoration"] svg{
+  fill:#e6edf3!important;color:#e6edf3!important;
+}
+[data-testid="stToolbar"] [data-baseweb="popover"],[data-testid="stToolbar"] [role="presentation"]{
+  background:#161b22!important;
+}
 /* --- 按鈕（深色）：Primary 藍底白字 / Secondary 灰藍底淺字；含 p 標籤、BaseButton、hover／active／focus --- */
 .stButton > button p,.stButton button p,button[data-testid*="BaseButton"] p,button[data-testid*="BaseButton"] span{
   color:inherit!important;
