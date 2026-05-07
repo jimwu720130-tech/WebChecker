@@ -1,7 +1,8 @@
 @echo off
 setlocal EnableExtensions
 chcp 65001 >nul
-cd /d "%~dp0"
+rem %~dp0 尾端含 \，若寫成 ""%~dp0"" 在 start 內層會變成 \\" 而觸發「語法不正確」；尾端加 . 可避免
+cd /d "%~dp0."
 
 if not exist "%~dp0run_streamlit_here.bat" (
   echo [錯誤] 找不到同資料夾內的 run_streamlit_here.bat，請勿只複製本檔而漏了其他檔案。
@@ -17,7 +18,7 @@ echo.
 echo 本視窗將於約 3 秒後自動關閉（不必按鍵）。
 echo.
 
-start "WebChecker Streamlit" cmd /k "cd /d ""%~dp0"" && call ""%~dp0run_streamlit_here.bat"""
+start "WebChecker Streamlit" /D "%~dp0." cmd /k "call run_streamlit_here.bat"
 
 timeout /t 3 /nobreak >nul
 exit /b 0

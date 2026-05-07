@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableExtensions
 chcp 65001 >nul
-cd /d "%~dp0"
+cd /d "%~dp0."
 
 rem 不使用 goto。Streamlit 結束後不強制 pause（Ctrl+C 時 errorlevel 也常非 0，易誤判）。
 

@@ -3,7 +3,7 @@ from typing import List, Optional, Set, Tuple
 import sys
 
 # 供除錯／版本確認：與 Streamlit 側欄「檢核核心版本」應一致
-SCAN_ENGINE_BUILD = "2026-05-06-p26"
+SCAN_ENGINE_BUILD = "2026-05-07-p28"
 import random
 import requests
 import urllib3
@@ -21,7 +21,7 @@ from html import unescape as html_unescape
 import html as html_stdlib
 from datetime import datetime, timedelta
 from pathlib import PurePosixPath
-from playwright.async_api import async_playwright
+from playwright.async_api import APIRequestContext, async_playwright
 
 # recycle.eri.com.tw utmap 店家詳情：首屏 HTML 常僅殼層，「官方網址」等欄位晚數百 ms 才由 API 注入；併發掃描時若略早取
 # `page.content()`，會漏掉外站 href，Excel 即無該外站列（但站內列「符合」仍在）。
@@ -535,13 +535,15 @@ def extract_same_domain_links(html:str,page_url:str,target_domain:str,file_exts=
 
 # 政府／大型站台在**高併發 HEAD/GET** 下易短暫逾時或重連；過短的連線逾時 + 單次探測會誤判為不可達。
 # 略放寬逾時，並在 `_probe_external_url_sync` 內對失敗結果做少量退避重試（見 `_EXTERNAL_PROBE_ATTEMPTS`）。
-_PROBE_REQ_TIMEOUT=(12, 30)
+_PROBE_REQ_TIMEOUT=(18, 40)
 # 同一批 Playwright 並行頁面**共用**此外站探測併發；過高易觸發對端限速／中斷，反增假陰性
-_BATCH_EXTERNAL_PROBE_CONCURRENCY=8
+_BATCH_EXTERNAL_PROBE_CONCURRENCY=5
 # 外站探測：同一 URL 組（含 http→https、尾端 / 變體）全滅後再重試之回合數（間隔遞增 sleep）
 _EXTERNAL_PROBE_ATTEMPTS=3
 # 單頁含「開頁＋擷取連結＋**全部**外站實測」總上限（外站多時必須夠長）
 _PAGE_SCAN_TIMEOUT_S=900
+# Playwright `APIRequestContext.get` 逾時（毫秒）：與 Chromium 同 TLS／HTTP 堆疊，較能貼近使用者點擊行為
+_PLAYWRIGHT_API_PROBE_MS=45_000
 _urllib3_insecure_warn_disabled=False
 
 def extract_external_http_links(html:str,page_url:str,site_host:str)->set:
@@ -642,10 +644,10 @@ _URL_SHORTENER_HOSTS = {
 
 # 縮網址「找不到該短址」之高鑑別度提示語：須確切點名「不存在／找不到／已過期／已失效」，
 # 避免短址服務暫時忙碌（出現『系統忙碌中』之類）時誤殺有效連結。
+# 英文避免過短片語（如 does not exist）——Google Maps／大型頁內嵌 JSON-LD 常含類似字樣而誤殺。
 _SHORTENER_NOT_FOUND_TEXTS = (
     "找不到該網址","短網址不存在","短網址已失效","網址不存在","網址已失效","已過期",
-    "Short URL not found","URL not found","Link not found","Link is invalid",
-    "Link expired","does not exist","not been found",
+    "Short URL not found","URL not found","Link not found","Link is invalid","Link expired",
 )
 
 
@@ -659,12 +661,17 @@ def _host_is_url_shortener(host:str)->bool:
     return any(h.endswith("."+d) for d in _URL_SHORTENER_HOSTS)
 
 
-def _looks_like_shortener_soft_404(host:str,body_text:str)->bool:
+def _looks_like_shortener_soft_404(host:str,body_text:str,probe_url:str="")->bool:
     """縮網址後台說「找不到」的軟性 404；HTTP 仍 200 但內容明示連結失效。
 
     僅以「找不到／不存在／已過期」之精準字串為判定依據，避免短網址服務暫時忙碌時誤判。
     """
     if not body_text or not _host_is_url_shortener(host):
+        return False
+    h=(host or"").lower().lstrip(".").lstrip("www.")
+    pu=(probe_url or"").lower()
+    # goo.gl/maps 多導向整頁 Google Maps；內文極長且不適用一般「短址失效」字串比對
+    if h=="goo.gl" and "/maps/" in pu:
         return False
     return any(p in body_text for p in _SHORTENER_NOT_FOUND_TEXTS)
 
@@ -782,7 +789,7 @@ def _try_probe_single_url(url:str,headers:dict)->bool:
         if not ok_status(code):
             return False
         if body:
-            if is_shortener and _looks_like_shortener_soft_404(host,body):
+            if is_shortener and _looks_like_shortener_soft_404(host,body,url):
                 return False
             if _looks_like_js_redirect_parking(body):
                 return False
@@ -792,6 +799,88 @@ def _try_probe_single_url(url:str,headers:dict)->bool:
         return _get_and_validate()
     except Exception:
         return False
+
+async def _try_probe_single_url_playwright(api:APIRequestContext,url:str,headers:dict)->bool:
+    """以 Playwright API GET 探測外站（與掃描用 Chromium 一致），再搭配與 requests 相同的狀態／內文規則。"""
+    def ok_status(code:Optional[int])->bool:
+        return _http_status_reachable_for_external_check(code)
+    try:
+        host=urlparse(url).netloc
+    except Exception:
+        host=""
+    is_shortener=_host_is_url_shortener(host)
+    try:
+        resp=await api.get(url,headers=headers,timeout=_PLAYWRIGHT_API_PROBE_MS,max_redirects=30)
+    except Exception:
+        return False
+    try:
+        code=resp.status
+    except Exception:
+        return False
+    ct=(resp.headers.get("content-type")or"").lower()
+    if code==400 and("text/html"in ct or"/html"in ct or"html"in ct):
+        code=200
+    if not ok_status(code):
+        return False
+    body=""
+    if code<400 and("text/html"in ct or"html"in ct or"text/"in ct or not ct.strip()):
+        try:
+            t=await resp.text()
+            body=(t or"")[:8192]
+        except Exception:
+            body=""
+    if body:
+        if is_shortener and _looks_like_shortener_soft_404(host,body,url):
+            return False
+        if _looks_like_js_redirect_parking(body):
+            return False
+    return True
+
+async def _probe_external_url_async(raw:str,referer:str,api_request:Optional[APIRequestContext])->bool:
+    """外站探測：優先 Playwright API（與瀏覽器較一致），失敗再退回 requests；候選網址規則同 `_probe_external_url_sync`。"""
+    global _urllib3_insecure_warn_disabled
+    if not _urllib3_insecure_warn_disabled:
+        try:
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        except Exception:
+            pass
+        _urllib3_insecure_warn_disabled=True
+    headers=_build_external_probe_headers(referer)
+    raw_stripped=(raw or"").strip()
+    if not raw_stripped:
+        return False
+    candidates=[raw_stripped]
+    if raw_stripped.lower().startswith("http://"):
+        try:
+            p=urlparse(raw_stripped)
+            if p.netloc:
+                https_u=urlunparse(("https",p.netloc,p.path or"",p.params,p.query,""))
+                if https_u and https_u!=raw_stripped:
+                    candidates=[https_u,raw_stripped]
+        except Exception:
+            pass
+    for attempt in range(max(1,_EXTERNAL_PROBE_ATTEMPTS)):
+        seen=set()
+        for u in candidates:
+            u=(u or"").strip()
+            if not u:
+                continue
+            for v in _probe_url_variants_trailing_slash(u):
+                if not v or v in seen:
+                    continue
+                seen.add(v)
+                if api_request:
+                    ok_pw=await _try_probe_single_url_playwright(api_request,v,headers)
+                    if ok_pw:
+                        return True
+                if _try_probe_single_url(v,headers):
+                    return True
+        if attempt+1<max(1,_EXTERNAL_PROBE_ATTEMPTS):
+            try:
+                await asyncio.sleep(0.7*(attempt+1))
+            except Exception:
+                pass
+    return False
 
 def _probe_external_url_sync(url:str,referer:str)->bool:
     """以 GET（stream）粗查外部網址是否可連（verify=False）；底層見 `_try_probe_single_url`。
@@ -845,14 +934,14 @@ def _probe_external_url_sync(url:str,referer:str)->bool:
                 pass
     return False
 
-def _probe_cache_get(probe_cache: dict, url: str, *, fail_ttl_s: int = 600) -> Optional[bool]:
+def _probe_cache_get(probe_cache: dict, url: str) -> Optional[bool]:
     """外站探測快取讀取。
 
-    目的：避免「暫時性失敗」被永久快取為 False，導致正常連結整批掃描都被誤判失效。
-    - True：永遠視為命中（不再探測）。
-    - False：僅在 fail_ttl_s 秒內視為命中；超過則允許重新探測一次。
+    **只信賴成功命中**：已快取之 True 表示該 URL 曾驗證可連，可省略重複 GET。
+    失敗**不快取**：逾時、瞬斷、對方節流等暫態若被記成「失敗」，在長時間掃描中會讓之後
+    所有出現該外連之頁面一律顯示「不符合」而無法自動恢復（見 probe_external_links_unreachable）。
 
-    相容舊格式：probe_cache[url] 可能是 bool；新版會寫入 {'ok': bool, 'ts': float}。
+    相容舊格式：probe_cache[url] 可能為 bool；僅 True 視為命中。
     """
     if not probe_cache or not url:
         return None
@@ -860,37 +949,36 @@ def _probe_cache_get(probe_cache: dict, url: str, *, fail_ttl_s: int = 600) -> O
     if v is None:
         return None
     if isinstance(v, bool):
-        # 舊版：False 可能是暫時性錯誤；不要永遠相信它。
         return True if v else None
     if isinstance(v, dict):
         ok = v.get("ok")
         if ok is True:
             return True
-        if ok is False:
-            try:
-                ts = float(v.get("ts") or 0.0)
-            except Exception:
-                ts = 0.0
-            if ts > 0 and (time.time() - ts) < float(fail_ttl_s):
-                return False
-            return None
+        probe_cache.pop(url, None)
     return None
 
 
 def _probe_cache_set(probe_cache: dict, url: str, ok: bool) -> None:
     if not isinstance(probe_cache, dict) or not url:
         return
-    probe_cache[url] = {"ok": bool(ok), "ts": float(time.time())}
+    if ok:
+        probe_cache[url] = {"ok": True, "ts": float(time.time())}
+    else:
+        probe_cache.pop(url, None)
 
 
 async def probe_external_links_unreachable(
-    urls:set,referer:str,probe_cache:dict,probe_sem:Optional[asyncio.Semaphore]=None
+    urls:set,referer:str,probe_cache:dict,probe_sem:Optional[asyncio.Semaphore]=None,
+    api_request:Optional[APIRequestContext]=None,
 )->Tuple[List[str],List[str]]:
     """(無法連線或 HTTP 判定失效, 掃到之**全部**外站 URL 字母序清單)。
 
-    **每一筆**外站 URL 皆會實際 GET 驗證（已快取**成功**者不重複請求）。**不再**對「曾失敗」快取短路。
-    單頁外站極多時掃描會變慢，屬預期行為。probe_cache 鍵為完整 URL，值為是否可連。
+    **每一筆**外站 URL 皆會實際 GET 驗證（已快取**成功**者不重複請求）。**失敗不快取**：
+    暫態錯誤不會讓整批掃描在後續頁面永遠誤判該外連為失效。
+    單頁外站極多時掃描會變慢，屬預期行為。probe_cache 僅記錄驗證成功之 URL。
     probe_sem：同一批並行掃描頁面共用，限制全批外站 HTTP 總併發。
+    若提供 **api_request**（`browser_context.request`），優先以 Chromium APIRequest 探測，降低與純
+    `requests` 指紋差異造成之假陰性；仍會在失敗時退回 `requests`。
     """
     if not urls:
         return [], []
@@ -901,11 +989,12 @@ async def probe_external_links_unreachable(
     failed=[]
 
     async def one(u:str):
-        cached = _probe_cache_get(probe_cache, u, fail_ttl_s=600)
-        if cached is True:
+        if _probe_cache_get(probe_cache, u) is True:
             return None
         async with sem:
-            ok=await asyncio.to_thread(_probe_external_url_sync,u,referer)
+            if _probe_cache_get(probe_cache, u) is True:
+                return None
+            ok=await _probe_external_url_async(u,referer,api_request)
         _probe_cache_set(probe_cache, u, ok)
         return u if not ok else None
 
@@ -2376,9 +2465,14 @@ async def check_single_page(
         ext_urls|=await _external_http_hrefs_from_item_live_dom(
             page, final_url, target_domain
         )
-        ref_probe=referer_url or _site_root_url(final_url)
+        ref_probe=(final_url or"").strip()
+        if not ref_probe or ref_probe.lower().startswith("about:"):
+            ref_probe=(referer_url or"").strip()
+        if not ref_probe:
+            ref_probe=_site_root_url(safe_url)
         external_failed,external_probed=await probe_external_links_unreachable(
-            ext_urls,ref_probe,probe_cache,probe_sem=external_probe_sem
+            ext_urls,ref_probe,probe_cache,probe_sem=external_probe_sem,
+            api_request=browser_context.request,
         )
     except Exception as e:
         if page_exceptions is not None:
