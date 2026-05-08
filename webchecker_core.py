@@ -4,7 +4,7 @@ import sys
 import logging
 
 # 供除錯／版本確認：與 Streamlit 側欄「檢核核心版本」應一致
-SCAN_ENGINE_BUILD = "2026-05-08-p35"
+SCAN_ENGINE_BUILD = "2026-05-08-p36"
 import random
 import requests
 import urllib3
@@ -423,6 +423,81 @@ def url_in_scan_scope(link_url:str,scope_url:str)->bool:
     lp_l=lp.lower()
     lb_l=lb.lower()
     return lp_l==lb_l or lp_l.startswith(lb_l+"/")
+
+# config.json：依網域儲存「不掃描的路徑前綴」完整 URL 清單（每列一筆，見 UI 說明）
+CONFIG_KEY_EXCLUSION_PATH_PREFIXES_BY_HOST = "exclusion_path_prefixes_by_host"
+
+
+def _path_key_for_exclusion(path: str) -> str:
+    """路徑正規化：解編碼、小寫、單一前導 /，去除結尾 /（根除外）。"""
+    try:
+        x = unquote((path or "").strip().replace("\\", "/"))
+        if not x.startswith("/"):
+            x = "/" + x
+        x = x.lower().rstrip("/")
+        return x if x else "/"
+    except Exception:
+        return "/"
+
+
+def load_exclusion_path_prefixes_for_scan_host(config: Optional[dict], scan_host: str) -> List[str]:
+    """合併 config 內所有與 scan_host 為同站之鍵底下的排除前綴 URL（同一組織多個 hostname 鍵可並存）。"""
+    h = (scan_host or "").lower().split(":")[0].strip(".")
+    if not h or not isinstance(config, dict):
+        return []
+    raw = config.get(CONFIG_KEY_EXCLUSION_PATH_PREFIXES_BY_HOST)
+    if not isinstance(raw, dict):
+        return []
+    seen = set()
+    out: List[str] = []
+    for key, vlist in raw.items():
+        kh = (key or "").lower().strip()
+        if not kh or not _same_scan_site(h, kh):
+            continue
+        if isinstance(vlist, str):
+            vlist = [ln.strip() for ln in vlist.splitlines() if ln.strip()]
+        if not isinstance(vlist, list):
+            continue
+        for x in vlist:
+            s = str(x).strip()
+            if s and s not in seen:
+                seen.add(s)
+                out.append(s)
+    return out
+
+
+def _url_matches_single_path_prefix(candidate_url: str, prefix_url: str) -> bool:
+    """candidate 與 prefix 為同 registrable 站，且 candidate 之路徑落在 prefix 之路徑（含）底下則為 True。"""
+    try:
+        cu = urlparse((candidate_url or "").strip().split("#", 1)[0])
+        pu = urlparse(normalize_url_input(prefix_url))
+    except Exception:
+        return False
+    ch = (cu.netloc or "").lower().split(":")[0].strip(".")
+    ph = (pu.netloc or "").lower().split(":")[0].strip(".")
+    if not ch or not ph:
+        return False
+    if not _same_scan_site(ch, ph):
+        return False
+    pk = _path_key_for_exclusion(pu.path or "/")
+    ck = _path_key_for_exclusion(cu.path or "/")
+    if pk == "/" or pk == "":
+        return True
+    return ck == pk or ck.startswith(pk + "/")
+
+
+def url_matches_any_path_exclusion(url: str, prefix_urls: List[str]) -> bool:
+    """若 url 落在任一 prefix_urls（完整 URL，path 為目錄／頁面前綴）底下則為 True。"""
+    if not (url or "").strip() or not prefix_urls:
+        return False
+    u = url.strip().split("#", 1)[0].strip()
+    for p in prefix_urls:
+        if not p or not str(p).strip():
+            continue
+        if _url_matches_single_path_prefix(u, str(p).strip()):
+            return True
+    return False
+
 
 # ==========================================
 # 智慧型URL編碼校正 (徹底解決中文路徑與重複編碼問題)

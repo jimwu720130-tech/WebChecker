@@ -84,6 +84,8 @@ from webchecker_core import (
     ordered_visited_urls_for_export, visited_urls_to_excel_bytes,
     load_favorites, save_favorites, load_config, save_config,
     normalize_url_input, normalize_favorites_upload, normalize_external_probe_url, get_clean_domain, url_in_scan_scope, _site_root_url,
+    load_exclusion_path_prefixes_for_scan_host, url_matches_any_path_exclusion,
+    CONFIG_KEY_EXCLUSION_PATH_PREFIXES_BY_HOST,
     _probe_cache_get,
     get_pagespeed_score, _run_scan_parallel_batch,
 )
@@ -500,22 +502,31 @@ if st.session_state.app_mode==APP_MODE_SCAN:
     run_psi=st.session_state.get("run_psi",True)
     if start_scan:
         if url_norm:
-            # 每次「開始掃描」視為新一輪：避免 URL 已在 visited 時 pop 後佇列被掏空、畫面卡在 0 頁
-            st.session_state.to_visit_urls=[url_norm]
-            st.session_state.visited_urls=set()
-            st.session_state.visited_order=[]
-            st.session_state.external_probed_order=[]
-            st.session_state.external_probed_seen=set()
-            st.session_state.external_probed_source={}
-            st.session_state.failure_report={}
-            st.session_state["_wc_external_url_probe_cache"]={}
-            st.session_state.global_features={k:False for k in ["favicon","privacy","security","phone","address","open_data","accessibility","nav","lang_ver","search","opinion","rwd","stats","date_info"]}
-            st.session_state.psi_done=False
-            st.session_state.is_scanning=True
-            st.session_state.scan_scope_root=url_norm
-            st.session_state._wc_scan_host_concurrency=random.randint(3,5)
-            for _k in("_scan_page_exception","_scan_last_exception","_scan_page_exceptions"):
-                if _k in st.session_state:del st.session_state[_k]
+            _cfg_chk=load_config()
+            _host_chk=get_clean_domain(url_norm)
+            _ex_prefs=load_exclusion_path_prefixes_for_scan_host(_cfg_chk,_host_chk)
+            if url_matches_any_path_exclusion(url_norm,_ex_prefs):
+                st.warning(
+                    "起始網址落在已設定的**排除路徑**底下，無法開始掃描。"
+                    "請更換起始網址，或到「排除規則設定」刪改該筆路徑前綴。"
+                )
+            else:
+                # 每次「開始掃描」視為新一輪：避免 URL 已在 visited 時 pop 後佇列被掏空、畫面卡在 0 頁
+                st.session_state.to_visit_urls=[url_norm]
+                st.session_state.visited_urls=set()
+                st.session_state.visited_order=[]
+                st.session_state.external_probed_order=[]
+                st.session_state.external_probed_seen=set()
+                st.session_state.external_probed_source={}
+                st.session_state.failure_report={}
+                st.session_state["_wc_external_url_probe_cache"]={}
+                st.session_state.global_features={k:False for k in ["favicon","privacy","security","phone","address","open_data","accessibility","nav","lang_ver","search","opinion","rwd","stats","date_info"]}
+                st.session_state.psi_done=False
+                st.session_state.is_scanning=True
+                st.session_state.scan_scope_root=url_norm
+                st.session_state._wc_scan_host_concurrency=random.randint(3,5)
+                for _k in("_scan_page_exception","_scan_last_exception","_scan_page_exceptions"):
+                    if _k in st.session_state:del st.session_state[_k]
         else:st.warning("請在「自訂網站」貼上網址，或於「常用網站」選擇一筆清單。")
 
     col2,col3=st.columns(2)
@@ -533,6 +544,9 @@ if st.session_state.app_mode==APP_MODE_SCAN:
             st.session_state.psi_result={"success":success,"avg":avg,"m":m,"d":d,"msg":msg}
             st.session_state.psi_done=True
         _scope=st.session_state.get("scan_scope_root")or url_norm
+        _cfg_ex=load_config()
+        _scan_host_ex=get_clean_domain(_scope)
+        _excl_prefixes=load_exclusion_path_prefixes_for_scan_host(_cfg_ex,_scan_host_ex)
         if "_wc_scan_host_concurrency" not in st.session_state:
             st.session_state._wc_scan_host_concurrency=random.randint(3,5)
         _cap=max(1,int(st.session_state._wc_scan_host_concurrency))
@@ -543,6 +557,9 @@ if st.session_state.app_mode==APP_MODE_SCAN:
                 st.session_state.to_visit_urls.pop(0)
                 continue
             if not url_in_scan_scope(cand,_scope):
+                st.session_state.to_visit_urls.pop(0)
+                continue
+            if url_matches_any_path_exclusion(cand,_excl_prefixes):
                 st.session_state.to_visit_urls.pop(0)
                 continue
             st.session_state.to_visit_urls.pop(0)
@@ -636,6 +653,7 @@ if st.session_state.app_mode==APP_MODE_SCAN:
                 ]
                 for l in links:
                     if not url_in_scan_scope(l,_eff_sc):continue
+                    if url_matches_any_path_exclusion(l,_excl_prefixes):continue
                     if l not in st.session_state.visited_urls:
                         st.session_state.to_visit_urls.append(l)
             if st.session_state.get("_scan_page_exceptions"):
@@ -847,11 +865,35 @@ elif st.session_state.app_mode==APP_MODE_FAV:
 # ==========================================
 elif st.session_state.app_mode==APP_MODE_EXCLUDE:
     st.title("🛡️排除規則設定")
-    in_url=st.text_input("請輸入網域(例如:recycle.eri.com.tw)")
+    st.caption(
+        "指定與掃描站台相同的網域後，每一行貼上一個**完整網址**作為「路徑前綴」："
+        "掃描時會**略過**該路徑本身及其底下所有子頁（不開啟、不進佇列）。"
+        "例：`https://recycle.moenv.gov.tw/News/NewInfo` 會略過 `/News/NewInfo` 與 `/News/NewInfo/…`。"
+    )
+    in_url=st.text_input("網域（與掃描目標相同，例如 recycle.moenv.gov.tw）")
     key=get_clean_domain(in_url)
     if key:
-        _cfg=load_config();rules=st.text_area("排除規則(每行一個關鍵字)",value=_cfg.get(key,""))
+        _cfg=load_config()
+        _bx=_cfg.get(CONFIG_KEY_EXCLUSION_PATH_PREFIXES_BY_HOST)
+        if not isinstance(_bx,dict):
+            _bx={}
+        _lines=_bx.get(key)
+        if isinstance(_lines,list):
+            _area_val="\n".join(str(x).strip() for x in _lines if str(x).strip())
+        else:
+            _area_val=""
+        rules=st.text_area(
+            "排除路徑前綴（每行一個完整 https 網址）",
+            value=_area_val,
+            height=220,
+            placeholder="https://recycle.moenv.gov.tw/News/NewInfo",
+        )
         if st.button("💾儲存規則"):
-            _cfg[key]=rules;save_config(_cfg);st.success("規則已儲存！")
+            if CONFIG_KEY_EXCLUSION_PATH_PREFIXES_BY_HOST not in _cfg or not isinstance(_cfg.get(CONFIG_KEY_EXCLUSION_PATH_PREFIXES_BY_HOST),dict):
+                _cfg[CONFIG_KEY_EXCLUSION_PATH_PREFIXES_BY_HOST]={}
+            _lst=[ln.strip() for ln in (rules or "").splitlines() if ln.strip()]
+            _cfg[CONFIG_KEY_EXCLUSION_PATH_PREFIXES_BY_HOST][key]=_lst
+            save_config(_cfg)
+            st.success("規則已儲存！（寫入 config.json，Cloud 請將檔案一併提交 Git 才會持久）")
 
 _wc_inject_streamlit_late_css_overrides()
