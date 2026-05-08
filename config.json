@@ -1,0 +1,15 @@
+{
+    "exclusion_path_prefixes_by_host": {
+        "recycle.moenv.gov.tw": [
+            "https://recycle.moenv.gov.tw/News/NewInfo",
+            "https://recycle.moenv.gov.tw/utmap"
+        ],
+        "recycle.eri.com.tw": [
+            "https://recycle.eri.com.tw/News/NewInfo",
+            "https://recycle.eri.com.tw/utmap"
+        ],
+        "recycle2.moenv.gov.tw": [
+            "https://recycle2.moenv.gov.tw/Bulletin"
+        ]
+    }
+}
