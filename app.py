@@ -432,6 +432,8 @@ if "external_probed_order"not in st.session_state:st.session_state.external_prob
 if "external_probed_seen"not in st.session_state:st.session_state.external_probed_seen=set()
 # 紀錄每個外站 URL 來自哪些站內頁面（依出現順序保留、去重）；供 Excel「來源站內頁面」欄使用。
 if "external_probed_source"not in st.session_state:st.session_state.external_probed_source={}
+# 紀錄每個站內 URL 來自哪些站內頁面（依出現順序保留、去重）；供 Excel「來源站內頁面」欄使用。
+if "internal_link_source" not in st.session_state:st.session_state.internal_link_source={}
 
 st.sidebar.title("🗂️系統選單")
 scan_btn=st.sidebar.button(APP_MODE_SCAN,use_container_width=True,type="primary" if st.session_state.app_mode==APP_MODE_SCAN else "secondary")
@@ -462,6 +464,7 @@ if st.session_state.app_mode==APP_MODE_SCAN:
         st.session_state.external_probed_order=[]
         st.session_state.external_probed_seen=set()
         st.session_state.external_probed_source={}
+        st.session_state.internal_link_source={}
         if "scan_scope_root" in st.session_state:del st.session_state["scan_scope_root"]
         if "_wc_scan_host_concurrency" in st.session_state:del st.session_state["_wc_scan_host_concurrency"]
         if "_scan_page_exceptions" in st.session_state:del st.session_state["_scan_page_exceptions"]
@@ -523,6 +526,7 @@ if st.session_state.app_mode==APP_MODE_SCAN:
                 st.session_state.external_probed_order=[]
                 st.session_state.external_probed_seen=set()
                 st.session_state.external_probed_source={}
+            st.session_state.internal_link_source={}
                 st.session_state.failure_report={}
                 st.session_state["_wc_external_url_probe_cache"]={}
                 st.session_state.global_features={k:False for k in ["favicon","privacy","security","phone","address","open_data","accessibility","nav","lang_ver","search","opinion","rwd","stats","date_info"]}
@@ -660,6 +664,12 @@ if st.session_state.app_mode==APP_MODE_SCAN:
                     if not url_in_scan_scope(l,_eff_sc):continue
                     if url_matches_any_path_exclusion(l,_excl_prefixes):continue
                     if l not in st.session_state.visited_urls:
+                        _im=st.session_state.setdefault("internal_link_source",{})
+                        _src_list=_im.setdefault(l,[])
+                        # 來源頁面：優先用 core 回傳的 final_url（反映實際導向後頁面）
+                        _src_page=(final_url or t)
+                        if _src_page and _src_page not in _src_list:
+                            _src_list.append(_src_page)
                         st.session_state.to_visit_urls.append(l)
             if st.session_state.get("_scan_page_exceptions"):
                 with st.expander("頁面解析時曾發生例外（該頁結果可能不完整）",expanded=False):
@@ -678,7 +688,8 @@ if st.session_state.app_mode==APP_MODE_SCAN:
         _ext=st.session_state.get("external_probed_order")or[]
         _fr5=set((st.session_state.failure_report or{}).get("5.有效連結")or[])
         _src_map=st.session_state.get("external_probed_source")or{}
-        _xlsx=visited_urls_to_excel_bytes(_ord,_ext,_fr5,external_source_map=_src_map)
+        _int_src=st.session_state.get("internal_link_source")or{}
+        _xlsx=visited_urls_to_excel_bytes(_ord,_ext,_fr5,external_source_map=_src_map,internal_source_map=_int_src)
         _fn=f"掃描網址清單_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
         st.download_button(
             "📥 下載掃描網址清單（Excel）",

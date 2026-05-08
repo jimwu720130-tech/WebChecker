@@ -158,6 +158,7 @@ def _excel_cell_url_hyperlink_writable(u:str)->bool:
 def visited_urls_to_excel_bytes(
     url_list, external_probed_list=None, link_invalid_urls:Optional[Set[str]]=None,
     external_source_map:Optional[dict]=None,
+    internal_source_map:Optional[dict]=None,
 ):
     """產生含站內掃描與外站之網址清單。
 
@@ -168,7 +169,8 @@ def visited_urls_to_excel_bytes(
     若為 None，該欄一律填「—」（相容舊呼叫端）。
 
     external_source_map：{外站 URL: [出現該連結之站內頁面 URL, ...]}；用於「來源站內頁面」欄。
-    站內列固定填「—」；外站列以換行串接所有來源頁，配合 wrap_text 顯示多行。
+    internal_source_map：{站內 URL: [出現該連結之站內頁面 URL, ...]}；用於「來源站內頁面」欄。
+    站內／外站列皆以換行串接所有來源頁，配合 wrap_text 顯示多行；無來源者顯示「—」。
 
     輸出之 xlsx：第一列標題啟用自動篩選；**「有效連結」為「不符合」之列排在清單最上方**（其餘列
     維持原本站內→外站之相對順序）；序號於排序後重新連續編號。
@@ -185,11 +187,14 @@ def visited_urls_to_excel_bytes(
         bad_norm={normalize_external_probe_url(x)for x in bad if x}
         bad_norm.discard("")
     src=external_source_map if isinstance(external_source_map,dict)else{}
+    isrc=internal_source_map if isinstance(internal_source_map,dict)else{}
     rows=[]
     for i,u in enumerate(v,1):
         uk=normalize_external_probe_url(u)if u else""
         lc="—"if bad_norm is None else("不符合"if uk and uk in bad_norm else"符合")
-        rows.append({"序號":i,"掃描網址":u,"類型":"站內掃描","有效連結":lc,"來源站內頁面":"—"})
+        srcs_i=isrc.get(u)or isrc.get(uk)or[]
+        srcs_text="\n".join(srcs_i)if srcs_i else"—"
+        rows.append({"序號":i,"掃描網址":u,"類型":"站內掃描","有效連結":lc,"來源站內頁面":srcs_text})
     off=len(rows)
     for idx,u in enumerate(e):
         uk=normalize_external_probe_url(u)if u else""
