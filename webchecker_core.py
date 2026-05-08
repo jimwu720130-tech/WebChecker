@@ -4,7 +4,7 @@ import sys
 import logging
 
 # 供除錯／版本確認：與 Streamlit 側欄「檢核核心版本」應一致
-SCAN_ENGINE_BUILD = "2026-05-08-p36"
+SCAN_ENGINE_BUILD = "2026-05-08-p37"
 import random
 import requests
 import urllib3

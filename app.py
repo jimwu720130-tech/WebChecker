@@ -405,6 +405,22 @@ button[data-testid="stBaseButton-primaryFormSubmit"]{
     )
 
 
+def _wc_first_exclusion_domain_from_config()->str:
+    """從 config 讀出第一個已設路徑排除的網域鍵，供排除設定頁初次／切換回此頁時帶入。"""
+    try:
+        cfg=load_config()
+        bx=cfg.get(CONFIG_KEY_EXCLUSION_PATH_PREFIXES_BY_HOST)
+        if not isinstance(bx,dict)or not bx:
+            return""
+        for k in sorted(bx.keys()):
+            v=bx.get(k)
+            if isinstance(v,list)and any(str(x).strip()for x in v):
+                return k
+        return sorted(bx.keys())[0]
+    except Exception:
+        return""
+
+
 # ==========================================
 # UI介面與進度顯示
 # ==========================================
@@ -870,7 +886,12 @@ elif st.session_state.app_mode==APP_MODE_EXCLUDE:
         "掃描時會**略過**該路徑本身及其底下所有子頁（不開啟、不進佇列）。"
         "例：`https://recycle.moenv.gov.tw/News/NewInfo` 會略過 `/News/NewInfo` 與 `/News/NewInfo/…`。"
     )
-    in_url=st.text_input("網域（與掃描目標相同，例如 recycle.moenv.gov.tw）")
+    if "wc_exclude_domain_input"not in st.session_state:
+        st.session_state.wc_exclude_domain_input=_wc_first_exclusion_domain_from_config()
+    in_url=st.text_input(
+        "網域（與掃描目標相同，例如 recycle.moenv.gov.tw）",
+        key="wc_exclude_domain_input",
+    )
     key=get_clean_domain(in_url)
     if key:
         _cfg=load_config()
@@ -887,6 +908,7 @@ elif st.session_state.app_mode==APP_MODE_EXCLUDE:
             value=_area_val,
             height=220,
             placeholder="https://recycle.moenv.gov.tw/News/NewInfo",
+            key=f"wc_exclude_rules_{key}",
         )
         if st.button("💾儲存規則"):
             if CONFIG_KEY_EXCLUSION_PATH_PREFIXES_BY_HOST not in _cfg or not isinstance(_cfg.get(CONFIG_KEY_EXCLUSION_PATH_PREFIXES_BY_HOST),dict):
@@ -894,6 +916,7 @@ elif st.session_state.app_mode==APP_MODE_EXCLUDE:
             _lst=[ln.strip() for ln in (rules or "").splitlines() if ln.strip()]
             _cfg[CONFIG_KEY_EXCLUSION_PATH_PREFIXES_BY_HOST][key]=_lst
             save_config(_cfg)
+            st.session_state.wc_exclude_domain_input=key
             st.success("規則已儲存！")
 
 _wc_inject_streamlit_late_css_overrides()
