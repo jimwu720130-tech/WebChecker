@@ -526,7 +526,7 @@ if st.session_state.app_mode==APP_MODE_SCAN:
                 st.session_state.external_probed_order=[]
                 st.session_state.external_probed_seen=set()
                 st.session_state.external_probed_source={}
-            st.session_state.internal_link_source={}
+                st.session_state.internal_link_source={}
                 st.session_state.failure_report={}
                 st.session_state["_wc_external_url_probe_cache"]={}
                 st.session_state.global_features={k:False for k in ["favicon","privacy","security","phone","address","open_data","accessibility","nav","lang_ver","search","opinion","rwd","stats","date_info"]}
