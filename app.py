@@ -405,20 +405,9 @@ button[data-testid="stBaseButton-primaryFormSubmit"]{
     )
 
 
-def _wc_first_exclusion_domain_from_config()->str:
-    """從 config 讀出第一個已設路徑排除的網域鍵，供排除設定頁初次／切換回此頁時帶入。"""
-    try:
-        cfg=load_config()
-        bx=cfg.get(CONFIG_KEY_EXCLUSION_PATH_PREFIXES_BY_HOST)
-        if not isinstance(bx,dict)or not bx:
-            return""
-        for k in sorted(bx.keys()):
-            v=bx.get(k)
-            if isinstance(v,list)and any(str(x).strip()for x in v):
-                return k
-        return sorted(bx.keys())[0]
-    except Exception:
-        return""
+def _wc_exclusion_widget_safe_key(host:str)->str:
+    """Streamlit widget key：hostname 可能含 . 等字元，轉成安全片段。"""
+    return"".join(c if c.isalnum() else"_" for c in (host or"").lower())[:120]
 
 
 # ==========================================
@@ -882,41 +871,87 @@ elif st.session_state.app_mode==APP_MODE_FAV:
 elif st.session_state.app_mode==APP_MODE_EXCLUDE:
     st.title("🛡️排除規則設定")
     st.caption(
-        "指定與掃描站台相同的網域後，每一行貼上一個**完整網址**作為「路徑前綴」："
-        "掃描時會**略過**該路徑本身及其底下所有子頁（不開啟、不進佇列）。"
+        "可設定**多個網域**；每個網域可填**多條**「路徑前綴」（每行一個**完整 https 網址**）。"
+        "掃描該站時會略過該路徑本身及其底下所有子頁（不開啟、不進佇列）。"
         "例：`https://recycle.moenv.gov.tw/News/NewInfo` 會略過 `/News/NewInfo` 與 `/News/NewInfo/…`。"
     )
-    if "wc_exclude_domain_input"not in st.session_state:
-        st.session_state.wc_exclude_domain_input=_wc_first_exclusion_domain_from_config()
-    in_url=st.text_input(
-        "網域（與掃描目標相同，例如 recycle.moenv.gov.tw）",
-        key="wc_exclude_domain_input",
-    )
-    key=get_clean_domain(in_url)
-    if key:
-        _cfg=load_config()
-        _bx=_cfg.get(CONFIG_KEY_EXCLUSION_PATH_PREFIXES_BY_HOST)
-        if not isinstance(_bx,dict):
-            _bx={}
-        _lines=_bx.get(key)
-        if isinstance(_lines,list):
-            _area_val="\n".join(str(x).strip() for x in _lines if str(x).strip())
+    _cfg_exclude=load_config()
+    _bx0=_cfg_exclude.get(CONFIG_KEY_EXCLUSION_PATH_PREFIXES_BY_HOST)
+    if not isinstance(_bx0,dict):
+        _bx0={}
+    _doms_sorted=sorted(_bx0.keys())
+    st.subheader("已設定的網域")
+    if not _doms_sorted:
+        st.info("尚未新增任何網域，請使用下方「新增網域排除」。")
+    for _dom in _doms_sorted:
+        _safe=_wc_exclusion_widget_safe_key(_dom)
+        _raw_lines=_bx0.get(_dom)
+        if not isinstance(_raw_lines,list):
+            _raw_lines=[]
+        _n_nonempty=len([x for x in _raw_lines if str(x).strip()])
+        _area_default="\n".join(str(x).strip() for x in _raw_lines if str(x).strip())
+        with st.expander(f"🌐 {_dom}（**{_n_nonempty}** 條排除前綴）",expanded=False):
+            _rules=st.text_area(
+                "排除路徑前綴（每行一個完整 https 網址）",
+                value=_area_default,
+                height=200,
+                placeholder="https://example.gov.tw/News/NewInfo",
+                key=f"wc_excl_rules_{_safe}",
+            )
+            _c_sv,_c_del=st.columns(2)
+            if _c_sv.button("💾 儲存此網域",key=f"wc_excl_save_{_safe}",use_container_width=True):
+                _cfg2=load_config()
+                _bx2=_cfg2.setdefault(CONFIG_KEY_EXCLUSION_PATH_PREFIXES_BY_HOST,{})
+                if not isinstance(_bx2,dict):
+                    _bx2={}
+                    _cfg2[CONFIG_KEY_EXCLUSION_PATH_PREFIXES_BY_HOST]=_bx2
+                _lst2=[ln.strip() for ln in (_rules or"").splitlines() if ln.strip()]
+                _bx2[_dom]=_lst2
+                save_config(_cfg2)
+                st.success(f"已更新 **{_dom}**")
+                st.rerun()
+            if _c_del.button("🗑️ 刪除此網域",key=f"wc_excl_del_{_safe}",use_container_width=True):
+                _cfg3=load_config()
+                _bx3=_cfg3.get(CONFIG_KEY_EXCLUSION_PATH_PREFIXES_BY_HOST)
+                if isinstance(_bx3,dict)and _dom in _bx3:
+                    del _bx3[_dom]
+                    if not _bx3:
+                        _cfg3[CONFIG_KEY_EXCLUSION_PATH_PREFIXES_BY_HOST]={}
+                    save_config(_cfg3)
+                _wk=f"wc_excl_rules_{_safe}"
+                if _wk in st.session_state:
+                    del st.session_state[_wk]
+                st.success(f"已刪除 **{_dom}**")
+                st.rerun()
+    st.divider()
+    st.subheader("➕ 新增網域排除")
+    with st.form("wc_excl_add_form",clear_on_submit=True):
+        _new_dom=st.text_input("網域（如 recycle.moenv.gov.tw，可貼完整 URL）")
+        _new_rules=st.text_area("排除路徑前綴（每行一個完整 https 網址）",height=180)
+        _add_sub=st.form_submit_button("新增並儲存",use_container_width=True,type="primary")
+    if _add_sub:
+        _kd=get_clean_domain(_new_dom)
+        _cfg_chk=load_config()
+        _bx_chk=_cfg_chk.get(CONFIG_KEY_EXCLUSION_PATH_PREFIXES_BY_HOST)
+        if not isinstance(_bx_chk,dict):
+            _bx_chk={}
+        if not _kd:
+            st.warning("請輸入有效網域。")
+        elif _kd in _bx_chk:
+            st.warning(f"網域 **{_kd}** 已存在，請展開上方區塊編輯。")
         else:
-            _area_val=""
-        rules=st.text_area(
-            "排除路徑前綴（每行一個完整 https 網址）",
-            value=_area_val,
-            height=220,
-            placeholder="https://recycle.moenv.gov.tw/News/NewInfo",
-            key=f"wc_exclude_rules_{key}",
-        )
-        if st.button("💾儲存規則"):
-            if CONFIG_KEY_EXCLUSION_PATH_PREFIXES_BY_HOST not in _cfg or not isinstance(_cfg.get(CONFIG_KEY_EXCLUSION_PATH_PREFIXES_BY_HOST),dict):
-                _cfg[CONFIG_KEY_EXCLUSION_PATH_PREFIXES_BY_HOST]={}
-            _lst=[ln.strip() for ln in (rules or "").splitlines() if ln.strip()]
-            _cfg[CONFIG_KEY_EXCLUSION_PATH_PREFIXES_BY_HOST][key]=_lst
-            save_config(_cfg)
-            st.session_state.wc_exclude_domain_input=key
-            st.success("規則已儲存！")
+            _lst_new=[ln.strip() for ln in (_new_rules or"").splitlines() if ln.strip()]
+            if not _lst_new:
+                st.warning("請至少輸入一條排除網址。")
+            else:
+                _cfg4=load_config()
+                _bx4=_cfg4.setdefault(CONFIG_KEY_EXCLUSION_PATH_PREFIXES_BY_HOST,{})
+                if not isinstance(_bx4,dict):
+                    _bx4={}
+                    _cfg4[CONFIG_KEY_EXCLUSION_PATH_PREFIXES_BY_HOST]=_bx4
+                _bx4[_kd]=_lst_new
+                save_config(_cfg4)
+                st.success(f"已新增 **{_kd}**（{len(_lst_new)} 條）")
+                st.rerun()
 
 _wc_inject_streamlit_late_css_overrides()
