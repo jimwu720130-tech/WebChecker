@@ -4,7 +4,7 @@ import sys
 import logging
 
 # 供除錯／版本確認：與 Streamlit 側欄「檢核核心版本」應一致
-SCAN_ENGINE_BUILD = "2026-05-08-p38"
+SCAN_ENGINE_BUILD = "2026-05-08-p39"
 import random
 import requests
 import urllib3
@@ -369,6 +369,31 @@ def _same_scan_site(host_a:str,host_b:str)->bool:
     if ha==hb:
         return True
     return _registrable_site_key(ha)==_registrable_site_key(hb)
+
+def _sanitize_external_link_source_page(cur_page_url:str,fallback_internal_url:str,target_domain:str)->str:
+    """Excel「來源站內頁面」：只允許與掃描 target_domain 同站之 URL。
+
+    分頁／自動點擊可能把 `page.url` 導到外站；此時改採 fallback（通常為本輪擷取之站內 final_url）。
+    若兩者皆非同站則回傳空字串。
+    """
+    td=(target_domain or"").strip().lower().split(":")[0].strip(".")
+    if not td:
+        return""
+    def _is_internal(u:str)->bool:
+        if not u or u.lower().startswith("about:"):
+            return False
+        try:
+            h=(urlparse(u.split("#",1)[0]).netloc or"").lower().split(":")[0].strip(".")
+        except Exception:
+            return False
+        return bool(h and _same_scan_site(h,td))
+    c0=(cur_page_url or"").strip().split("#",1)[0].strip()
+    if _is_internal(c0):
+        return c0
+    f0=(fallback_internal_url or"").strip().split("#",1)[0].strip()
+    if _is_internal(f0):
+        return f0
+    return""
 
 def _random_read_delay_ms()->int:
     """模擬人類閱讀間隔（毫秒）。"""
@@ -1806,9 +1831,8 @@ async def gather_extracted_links_for_visible_page(
 ):
     """擷取目前畫面之站內可訪問連結與外站連結。
 
-    ext_http_sources：若提供，記錄「**外站 URL → 擷取當下實際可見的站內頁面 URL 列表**」之對映；
-    分頁／Tab 切換時 `page.url` 可能與初次導航之 final_url 不同，故以**當下** `page.url` 作為來源頁，
-    讓報表「來源站內頁面」反映該外連在 DOM 中真正出現的那個分頁，而非掃描入口頁。
+    ext_http_sources：若提供，記錄「**外站 URL → 站內來源頁 URL 列表**」；來源僅允許與 target_domain 同站
+    （`page.url` 若已誤導至外站則改以本輪傳入之 final_url 作為 fallback）。
     """
     html_content=await page.content()
     if ext_http_seen is not None:
@@ -1820,11 +1844,10 @@ async def gather_extracted_links_for_visible_page(
         ext_http_seen|=new_dom_set
         if ext_http_sources is not None:
             try:
-                cur_src=(page.url or "").strip()
+                cur_raw=(page.url or "").strip()
             except Exception:
-                cur_src=""
-            if not cur_src or cur_src.lower().startswith("about:"):
-                cur_src=final_url
+                cur_raw=""
+            cur_src=_sanitize_external_link_source_page(cur_raw,final_url,target_domain)
             for u in (new_html_set | new_dom_set):
                 if not u:
                     continue
@@ -2768,7 +2791,7 @@ async def check_single_page(
         ext_http_seen=set()
         # 外站 URL → 出現該連結之站內頁面 URL 列表（依出現順序、去重）。
         # 分頁／Tab 切換時 page.url 變動之追蹤已內建於 gather_extracted_links_for_visible_page；
-        # 本處於迴圈結束後另行補抓「最後狀態」之 DOM，亦以當下 page.url 為來源頁，避免一律歸到掃描入口。
+        # 本處於迴圈結束後另行補抓「最後狀態」之 DOM；來源頁仍僅允許站內 URL（見 _sanitize_external_link_source_page）。
         ext_http_sources={}
         extracted_links=await collect_links_with_pagination(
             page,browser_context,final_url,target_domain,file_exts,
@@ -2794,11 +2817,10 @@ async def check_single_page(
         )
         ext_urls=ext_http_seen|_post_html_set|_post_dom_set
         try:
-            _post_src=(page.url or "").strip()
+            _post_raw=(page.url or "").strip()
         except Exception:
-            _post_src=""
-        if not _post_src or _post_src.lower().startswith("about:"):
-            _post_src=final_url
+            _post_raw=""
+        _post_src=_sanitize_external_link_source_page(_post_raw,final_url,target_domain)
         for _u in (_post_html_set|_post_dom_set):
             if not _u:
                 continue
