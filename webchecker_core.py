@@ -4,7 +4,7 @@ import sys
 import logging
 
 # 供除錯／版本確認：與 Streamlit 側欄「檢核核心版本」應一致
-SCAN_ENGINE_BUILD = "2026-05-08-p33"
+SCAN_ENGINE_BUILD = "2026-05-08-p35"
 import random
 import requests
 import urllib3
@@ -30,6 +30,80 @@ _UTMAP_STATION_DETAIL_PATH_RE=re.compile(
     r"/utmap/stations/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
     re.I,
 )
+
+# Playwright：降低 headless／自動化指紋；部分企業站（含 *.eri.com.tw 常見外包／WAF）會擋或延遲注入連結。
+_PLAYWRIGHT_CHROMIUM_LAUNCH_ARGS=(
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+    "--disable-setuid-sandbox",
+    "--disable-blink-features=AutomationControlled",
+)
+
+_NAVIGATOR_WEBDRIVER_HIDE_JS="""(() => {
+  try { Object.defineProperty(navigator, 'webdriver', { get: () => undefined }); } catch (e) {}
+})();"""
+
+
+async def _wait_if_no_anchor_yet(page, budget_ms: int = 6500) -> None:
+    """若仍無任何 `a[href]`，短暫等待（Vue／ASP.NET＋外包 JS 常晚於 domcontentloaded 才插入導覽）。"""
+    try:
+        n = await page.evaluate("() => document.querySelectorAll('a[href]').length")
+        if isinstance(n, int) and n > 0:
+            return
+    except Exception:
+        pass
+    try:
+        await page.wait_for_selector("a[href]", timeout=budget_ms)
+    except Exception:
+        pass
+    try:
+        await page.wait_for_timeout(600)
+    except Exception:
+        pass
+
+
+_LINK_DISCOVERY_FALLBACK_TIMEOUT=(18, 42)
+
+
+def _fetch_html_link_discovery_fallback(page_url: str, referer_url: str) -> str:
+    """Headless 遭 WAF／資料中心 IP 軟擋時常拿到空殼 HTML；改以一般 HTTPS GET（等同瀏覽器 UA）補抓原始 HTML 供擷 href。
+
+    典型情境：Streamlit Community Cloud 出口 IP 與本機不同，站台對自動化回應差異大。
+    """
+    u = (page_url or "").strip()
+    if not u or not u.lower().startswith(("http://", "https://")):
+        return ""
+    try:
+        ua = _pick_user_agent()
+        headers = {
+            "User-Agent": ua,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.7",
+            "Referer": (referer_url or "").strip() or _site_root_url(u),
+        }
+        r = requests.get(
+            u,
+            headers=headers,
+            timeout=_LINK_DISCOVERY_FALLBACK_TIMEOUT,
+            allow_redirects=True,
+            verify=False,
+        )
+        if r.status_code >= 400:
+            return ""
+        ct = (r.headers.get("Content-Type") or "").lower().split(";")[0].strip()
+        if ct and ct not in ("text/html", "application/xhtml+xml"):
+            if ct.startswith(("application/octet-stream", "application/pdf")):
+                return ""
+        raw = r.content
+        enc = (getattr(r, "encoding", None) or "").strip() or "utf-8"
+        try:
+            return raw.decode(enc)
+        except Exception:
+            return raw.decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
 
 # 與側邊選單頁面切換一致（勿與按鈕文案脫鉤）
 APP_MODE_SCAN="🔍執行全站掃描"
@@ -2559,10 +2633,11 @@ async def check_single_page(
         except Exception:
             pass
         try:
-            await page.wait_for_load_state("networkidle",timeout=1500)
+            await page.wait_for_load_state("networkidle",timeout=3500)
         except Exception:
             pass
-        await page.wait_for_timeout(1200)
+        await page.wait_for_timeout(1500)
+        await _wait_if_no_anchor_yet(page)
         try:
             if _UTMAP_STATION_DETAIL_PATH_RE.search(urlparse(safe_url).path or ""):
                 try:
@@ -2626,6 +2701,17 @@ async def check_single_page(
         )
         if link_queue_scope:
             extracted_links={u for u in extracted_links if url_in_scan_scope(u, link_queue_scope)}
+        # Streamlit Cloud：Playwright 常被送空殼／挑戰頁 → 站內連結 0 筆；以同源 GET 補抓（與一般瀏覽器請求較接近）。
+        if not extracted_links:
+            _ref_fb = ((referer_url or "").strip() or _site_root_url(safe_url))
+            try:
+                _html_fb = await asyncio.to_thread(_fetch_html_link_discovery_fallback, final_url, _ref_fb)
+                if _html_fb:
+                    extracted_links |= extract_same_domain_links(_html_fb, final_url, target_domain, file_exts)
+                    if link_queue_scope:
+                        extracted_links={u for u in extracted_links if url_in_scan_scope(u, link_queue_scope)}
+            except Exception:
+                pass
         html_content=await page.content()
         _post_html_set=extract_external_http_links(html_content,final_url,target_domain)
         _post_dom_set=await _external_http_hrefs_from_item_live_dom(
@@ -2690,20 +2776,21 @@ async def _run_scan_parallel_batch(targets,url_norm,scope_root,referer_url,host_
         # Streamlit Cloud 等容器化環境啟動 Chromium 必須關閉沙盒並改用 /tmp 而非 /dev/shm，
         # 否則會以「Target page, context or browser has been closed」或「Failed to launch」失敗。
         # 本機 Windows 加上這些參數亦無副作用。
-        browser=await p.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--disable-setuid-sandbox",
-            ],
-        )
+        browser=await p.chromium.launch(headless=True,args=list(_PLAYWRIGHT_CHROMIUM_LAUNCH_ARGS))
         try:
             async def work(t):
                 async with sem:
                     ua=_pick_user_agent()
-                    ctx=await browser.new_context(user_agent=ua,ignore_https_errors=True)
+                    ctx=await browser.new_context(
+                        user_agent=ua,
+                        ignore_https_errors=True,
+                        locale="zh-TW",
+                        viewport={"width": 1366, "height": 768},
+                    )
+                    try:
+                        await ctx.add_init_script(_NAVIGATOR_WEBDRIVER_HIDE_JS)
+                    except Exception:
+                        pass
                     try:
                         return await asyncio.wait_for(
                             check_single_page(
