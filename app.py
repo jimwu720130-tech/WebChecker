@@ -894,6 +894,6 @@ elif st.session_state.app_mode==APP_MODE_EXCLUDE:
             _lst=[ln.strip() for ln in (rules or "").splitlines() if ln.strip()]
             _cfg[CONFIG_KEY_EXCLUSION_PATH_PREFIXES_BY_HOST][key]=_lst
             save_config(_cfg)
-            st.success("規則已儲存！（寫入 config.json，Cloud 請將檔案一併提交 Git 才會持久）")
+            st.success("規則已儲存！")
 
 _wc_inject_streamlit_late_css_overrides()
