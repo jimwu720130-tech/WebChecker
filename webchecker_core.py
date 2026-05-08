@@ -4,7 +4,7 @@ import sys
 import logging
 
 # 供除錯／版本確認：與 Streamlit 側欄「檢核核心版本」應一致
-SCAN_ENGINE_BUILD = "2026-05-08-p39"
+SCAN_ENGINE_BUILD = "2026-05-08-p40"
 import random
 import requests
 import urllib3
@@ -338,42 +338,23 @@ def path_scope_base_parts(scope_url:str):
             base=par
     return host,base
 
-# 二階層「公開後綴」：同一組織下 rrms.eri.com.tw 與 www.rrms.eri.com.tw 應視為同站；
-# recycle.moenv.gov.tw 與 www.recycle.moenv.gov.tw 同理。
-_MULTI_SUFFIX_TLDS=(
-    "com.tw","gov.tw","edu.tw","org.tw","net.tw",
-    "co.uk","org.uk","ac.uk",
-    "co.jp","ne.jp","or.jp",
-    "com.hk","gov.hk","edu.hk",
-    "com.au","net.au","org.au",
-)
-
-def _registrable_site_key(netloc:str)->str:
-    """將 hostname 對應到『同一組織站台』之鍵（台灣二階網域與 www 別名）。"""
-    h=(netloc or"").lower().split(":")[0].strip(".")
-    if not h:
-        return""
-    parts=h.split(".")
-    if len(parts)<2:
-        return h
-    for suf in _MULTI_SUFFIX_TLDS:
-        k=len(suf.split("."))
-        if len(parts)>=k and".".join(parts[-k:])==suf:
-            if len(parts)>=k+1:
-                return".".join(parts[-(k+1):])
-            return suf
-    if len(parts)>=3 and parts[0]=="www":
-        return".".join(parts[1:])
-    return h
-
 def _same_scan_site(host_a:str,host_b:str)->bool:
+    """站內判定：只允許同一 hostname（外加 www. 別名）。
+
+    使用者指定掃描 `recycle.moenv.gov.tw` 時，不應自動納入 `www.moenv.gov.tw` 等其它子網域；
+    僅 `www.recycle.moenv.gov.tw`（或反向）視為同站別名。
+    """
     ha=(host_a or"").lower().split(":")[0].strip(".")
     hb=(host_b or"").lower().split(":")[0].strip(".")
     if not ha or not hb:
         return False
     if ha==hb:
         return True
-    return _registrable_site_key(ha)==_registrable_site_key(hb)
+    if ha.startswith("www.") and ha[4:]==hb:
+        return True
+    if hb.startswith("www.") and hb[4:]==ha:
+        return True
+    return False
 
 def _sanitize_external_link_source_page(cur_page_url:str,fallback_internal_url:str,target_domain:str)->str:
     """Excel「來源站內頁面」：只允許與掃描 target_domain 同站之 URL。
